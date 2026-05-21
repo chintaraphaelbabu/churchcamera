@@ -23,7 +23,8 @@
         <article class="panel stream-card">
           <h2>Live output</h2>
           <div class="video-shell">
-            <img id="streamView" alt="Live phone stream" />
+            <video id="streamView" autoplay playsinline muted style="display: none;"></video>
+            <img id="fallbackView" alt="Fallback MJPEG stream" style="display: none;" />
             <div class="overlay">
               <div class="status-chip"><span class="dot live"></span><span id="streamStatus">Waiting for a phone</span></div>
               <div class="status-chip"><span id="streamHint">Use this as the OBS browser source</span></div>
