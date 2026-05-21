@@ -24,6 +24,7 @@ class LocalBridgeServer(
     private val port: Int = 8787,
     private val onRemoteUpdate: (Map<String, String?>) -> Unit,
     private val onConnectionStatusChanged: (total: Int) -> Unit,
+    private val onWebrtcOffer: (String, (String) -> Unit) -> Unit,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val latestFrame = AtomicReference(ByteArray(0))
@@ -73,14 +74,44 @@ class LocalBridgeServer(
             val requestParts = requestLine.split(Regex("\\s+"))
             if (requestParts.size < 2) return
 
+            val method = requestParts[0].uppercase(Locale.US)
             val pathWithQuery = requestParts[1]
             val uri = pathWithQuery.substringBefore("?")
             val query = parseQuery(pathWithQuery.substringAfter("?", ""))
             val output = BufferedOutputStream(client.getOutputStream())
 
+            if (method == "OPTIONS") {
+                val corsResponse = "HTTP/1.1 204 No Content\r\n" +
+                        "Access-Control-Allow-Origin: *\r\n" +
+                        "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n" +
+                        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n" +
+                        "Access-Control-Max-Age: 86400\r\n" +
+                        "Connection: keep-alive\r\n\r\n"
+                output.write(corsResponse.toByteArray(StandardCharsets.UTF_8))
+                output.flush()
+                return
+            }
+
+            var contentLength = 0
             while (true) {
                 val headerLine = reader.readLine() ?: break
                 if (headerLine.isBlank()) break
+                if (headerLine.lowercase(Locale.US).startsWith("content-length:")) {
+                    contentLength = headerLine.substringAfter(":").trim().toIntOrNull() ?: 0
+                }
+            }
+
+            val body = if (contentLength > 0) {
+                val charBuffer = CharArray(contentLength)
+                var read = 0
+                while (read < contentLength) {
+                    val chunk = reader.read(charBuffer, read, contentLength - read)
+                    if (chunk < 0) break
+                    read += chunk
+                }
+                String(charBuffer, 0, read)
+            } else {
+                ""
             }
 
             when {
@@ -96,6 +127,30 @@ class LocalBridgeServer(
                   scope.launch { onRemoteUpdate(query) }
                     writeText(output, JSONObjectFactory.ok("settings updated"), "application/json; charset=utf-8")
                 }
+                uri == "/api/webrtc/offer" -> {
+                    try {
+                        val offerJson = org.json.JSONObject(body)
+                        val sdp = offerJson.optString("sdp", "")
+                        if (sdp.isNotEmpty()) {
+                            val latch = java.util.concurrent.CountDownLatch(1)
+                            var answerSdp = ""
+                            onWebrtcOffer(sdp) { answer ->
+                                answerSdp = answer
+                                latch.countDown()
+                            }
+                            latch.await(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
+                            val responseJson = org.json.JSONObject()
+                                .put("ok", answerSdp.isNotEmpty())
+                                .put("sdp", answerSdp)
+                                .put("type", "answer")
+                            writeText(output, responseJson.toString(), "application/json; charset=utf-8")
+                        } else {
+                            writeText(output, org.json.JSONObject().put("ok", false).put("error", "empty sdp").toString(), "application/json; charset=utf-8", code = 400)
+                        }
+                    } catch (e: Exception) {
+                        writeText(output, org.json.JSONObject().put("ok", false).put("error", e.message ?: "unknown").toString(), "application/json; charset=utf-8", code = 500)
+                    }
+                }
                 uri == "/stream.mjpg" || uri.startsWith("/stream") -> writeMjpeg(client, output)
                 else -> writeText(output, "Not found", "text/plain; charset=utf-8", code = 404)
             }
@@ -106,6 +161,8 @@ class LocalBridgeServer(
         output.write(
             (
                 "HTTP/1.1 200 OK\r\n" +
+                    "Access-Control-Allow-Origin: *\r\n" +
+                    "Access-Control-Allow-Private-Network: true\r\n" +
                     "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
                     "Pragma: no-cache\r\n" +
                     "Connection: keep-alive\r\n" +
@@ -143,7 +200,10 @@ class LocalBridgeServer(
     ) {
         val statusText = when(code) {
             200 -> "OK"
+            204 -> "No Content"
+            400 -> "Bad Request"
             404 -> "Not Found"
+            500 -> "Internal Server Error"
             else -> "Error"
         }
         val header = buildString {
@@ -152,6 +212,8 @@ class LocalBridgeServer(
             append(" ")
             append(statusText)
             append("\r\n")
+            append("Access-Control-Allow-Origin: *\r\n")
+            append("Access-Control-Allow-Private-Network: true\r\n")
             append("Content-Type: ")
             append(contentType)
             append("\r\n")
@@ -186,12 +248,105 @@ class LocalBridgeServer(
                 <div id="dot"></div>
                 <div id="status-text">BRIDGE READY</div>
             </div>
-            <img src="/stream.mjpg" style="width: 100vw; height: 100vh; object-fit: contain;" />
+            <video id="streamView" autoplay playsinline muted style="width: 100vw; height: 100vh; object-fit: contain; display: none;"></video>
+            <img id="fallbackView" src="" style="width: 100vw; height: 100vh; object-fit: contain; display: none;" />
             <script>
               let _isVisible = false;
               let _isActive = false;
               let _lastSent = null;
               let _debounce = null;
+              let peerConnection = null;
+              const streamView = document.getElementById('streamView');
+              const fallbackView = document.getElementById('fallbackView');
+
+              function closeExistingConnection() {
+                if (peerConnection) {
+                  try { peerConnection.close(); } catch(e) {}
+                  peerConnection = null;
+                }
+                if (streamView.srcObject) {
+                  try {
+                    streamView.srcObject.getTracks().forEach(track => track.stop());
+                  } catch(e) {}
+                  streamView.srcObject = null;
+                }
+                streamView.style.display = 'none';
+                fallbackView.src = '';
+                fallbackView.style.display = 'none';
+              }
+
+              async function initStreaming() {
+                closeExistingConnection();
+                streamView.style.display = 'block';
+                console.log('Initiating WebRTC connection...');
+
+                try {
+                  const pc = new RTCPeerConnection({ iceServers: [] });
+                  peerConnection = pc;
+
+                  pc.addTransceiver('video', { direction: 'recvonly' });
+
+                  pc.ontrack = (event) => {
+                    console.log('WebRTC track received:', event.streams);
+                    if (event.streams && event.streams[0]) {
+                      streamView.srcObject = event.streams[0];
+                      streamView.play().catch(e => console.warn('Autoplay blocked, waiting for interaction:', e));
+                    }
+                  };
+
+                  pc.oniceconnectionstatechange = () => {
+                    console.log('ICE connection state:', pc.iceConnectionState);
+                    if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                      console.warn('ICE failed, falling back to MJPEG');
+                      fallbackToMjpeg();
+                    }
+                  };
+
+                  const offer = await pc.createOffer();
+                  await pc.setLocalDescription(offer);
+
+                  if (pc.iceGatheringState !== 'complete') {
+                    await new Promise((resolve) => {
+                      function checkState() {
+                        if (pc.iceGatheringState === 'complete') {
+                          pc.removeEventListener('icegatheringstatechange', checkState);
+                          resolve();
+                        }
+                      }
+                      pc.addEventListener('icegatheringstatechange', checkState);
+                      setTimeout(resolve, 800);
+                    });
+                  }
+
+                  const localDesc = pc.localDescription;
+                  const response = await fetch('/api/webrtc/offer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sdp: localDesc.sdp, type: 'offer' })
+                  });
+
+                  if (!response.ok) throw new Error('Signaling failed');
+                  const answerJson = await response.json();
+                  if (answerJson.ok && answerJson.sdp) {
+                    await pc.setRemoteDescription(new RTCSessionDescription({
+                      type: 'answer',
+                      sdp: answerJson.sdp
+                    }));
+                    console.log('WebRTC connected successfully');
+                  } else {
+                    throw new Error(answerJson.error || 'Invalid answer');
+                  }
+                } catch (e) {
+                  console.warn('WebRTC failed, falling back:', e);
+                  fallbackToMjpeg();
+                }
+              }
+
+              function fallbackToMjpeg() {
+                closeExistingConnection();
+                fallbackView.style.display = 'block';
+                fallbackView.src = '/stream.mjpg';
+              }
 
               function applyUi(stateStr) {
                 const node = document.getElementById('body-node');
@@ -254,6 +409,9 @@ class LocalBridgeServer(
               // periodic check in case events are missed
               setInterval(report, 2500);
               report();
+
+              // Initialize direct local low-latency WebRTC streaming
+              initStreaming();
             </script>
           </body>
         </html>
