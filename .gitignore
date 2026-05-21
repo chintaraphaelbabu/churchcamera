@@ -1,0 +1,16 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+
+# IDE metadata
+.idea/
+*.iml
+
+# Node relay runtime files
+obs-relay/node_modules/
+obs-relay/devices.json
+
+# OS files
+.DS_Store
+Thumbs.db

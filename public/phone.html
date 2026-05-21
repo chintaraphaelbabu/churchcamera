@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/styles.css" />
+    <title>Phone Camera Control</title>
+  </head>
+  <body>
+    <main class="layout">
+      <header class="topbar">
+        <div>
+          <div class="muted small">Phone view</div>
+          <h1>Camera control</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="pill" id="connectionPill"><span class="dot offline" id="connectionDot"></span><span id="connectionText">offline</span></span>
+          <span class="pill" id="livePill"><span class="dot" id="liveDot"></span><span id="liveText">not live</span></span>
+        </div>
+      </header>
+
+      <section class="grid phone-layout">
+        <article class="panel">
+          <h2>Preview</h2>
+          <div class="video-shell">
+            <video id="preview" autoplay playsinline muted></video>
+            <div class="overlay">
+              <div class="status-chip"><span class="dot" id="previewDot"></span><span id="previewText">Idle</span></div>
+              <div class="status-chip"><span id="qualityReadout">1080p / 30 fps</span></div>
+            </div>
+          </div>
+          <div class="device-toolbar" style="margin-top:12px">
+            <button id="refreshDevices">Refresh cameras</button>
+            <button id="smartPick">Smart pick lens</button>
+            <button id="setLive">Mark live</button>
+          </div>
+          <div class="status-grid" style="margin-top:12px">
+            <div class="field">
+              <label for="cameraSelect">Lens / camera</label>
+              <select id="cameraSelect"></select>
+            </div>
+            <div class="control-grid">
+              <div class="field">
+                <label for="resolutionSelect">Resolution</label>
+                <select id="resolutionSelect">
+                  <option>720p</option>
+                  <option selected>1080p</option>
+                  <option>1440p</option>
+                  <option>4k</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="fpsSelect">Frame rate</label>
+                <select id="fpsSelect">
+                  <option>24</option>
+                  <option selected>30</option>
+                  <option>60</option>
+                </select>
+              </div>
+            </div>
+            <div class="control-grid">
+              <div class="field">
+                <label for="qualitySelect">JPEG quality / bitrate target</label>
+                <input id="qualitySelect" type="range" min="40" max="95" value="80" />
+              </div>
+              <div class="field">
+                <label for="bitrateSelect">Nominal bitrate</label>
+                <input id="bitrateSelect" type="range" min="1" max="16" value="6" />
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <aside class="panel">
+          <h2>Manual controls</h2>
+          <div class="control-grid">
+            <div class="control">
+              <label for="isoControl">ISO</label>
+              <input id="isoControl" type="range" min="0" max="1600" step="1" value="200" />
+            </div>
+            <div class="control">
+              <label for="shutterControl">Shutter speed</label>
+              <input id="shutterControl" type="range" min="1" max="120" step="1" value="60" />
+            </div>
+            <div class="control">
+              <label for="wbControl">White balance</label>
+              <select id="wbControl">
+                <option value="auto">Auto</option>
+                <option value="incandescent">Incandescent</option>
+                <option value="fluorescent">Fluorescent</option>
+                <option value="daylight">Daylight</option>
+                <option value="cloudy">Cloudy</option>
+              </select>
+            </div>
+            <div class="control">
+              <label for="zoomControl">Zoom</label>
+              <input id="zoomControl" type="range" min="1" max="5" step="0.1" value="1" />
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <h3>Status</h3>
+            <div class="status-grid small">
+              <div><strong>Device:</strong> <span id="deviceName">none</span></div>
+              <div><strong>Quality:</strong> <span id="qualityLabel">80</span></div>
+              <div><strong>Bitrate target:</strong> <span id="bitrateLabel">6 Mbps</span></div>
+              <div><strong>Last sync:</strong> <span id="lastSync">never</span></div>
+              <div><strong>Supported controls:</strong> <span id="capabilityLabel">probing...</span></div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/phone.js"></script>
+  </body>
+</html>

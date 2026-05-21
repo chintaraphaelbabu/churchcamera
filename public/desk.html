@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/styles.css" />
+    <title>Laptop Dashboard</title>
+  </head>
+  <body>
+    <main class="layout">
+      <header class="topbar">
+        <div>
+          <div class="muted small">Laptop view</div>
+          <h1>OBS control center</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="pill" id="deskConnection"><span class="dot offline" id="deskDot"></span><span id="deskText">offline</span></span>
+          <span class="pill"><span class="dot live" id="deskLiveDot"></span><span id="deskLiveText">No active source</span></span>
+        </div>
+      </header>
+
+      <section class="grid">
+        <article class="panel stream-card">
+          <h2>Live output</h2>
+          <div class="video-shell">
+            <img id="streamView" alt="Live phone stream" />
+            <div class="overlay">
+              <div class="status-chip"><span class="dot live"></span><span id="streamStatus">Waiting for a phone</span></div>
+              <div class="status-chip"><span id="streamHint">Use this as the OBS browser source</span></div>
+            </div>
+          </div>
+          <div class="device-toolbar" style="margin-top:12px">
+            <button id="reloadState">Reload state</button>
+            <button id="markLive">Mark selected live</button>
+          </div>
+        </article>
+
+        <aside class="panel">
+          <h2>Devices</h2>
+          <div id="deviceList" class="device-list"></div>
+          <div class="card">
+            <h3>Remote controls</h3>
+            <div class="control-grid">
+              <div class="field">
+                <label for="remoteDeviceSelect">Target device</label>
+                <select id="remoteDeviceSelect"></select>
+              </div>
+              <div class="field">
+                <label for="remoteResolution">Resolution</label>
+                <select id="remoteResolution">
+                  <option>720p</option>
+                  <option selected>1080p</option>
+                  <option>1440p</option>
+                  <option>4k</option>
+                </select>
+              </div>
+              <div class="control">
+                <label for="remoteZoom">Zoom</label>
+                <input id="remoteZoom" type="range" min="1" max="5" step="0.1" value="1" />
+              </div>
+              <div class="control">
+                <label for="remoteFps">Frame rate</label>
+                <input id="remoteFps" type="range" min="24" max="60" step="1" value="30" />
+              </div>
+            </div>
+            <div class="device-toolbar" style="margin-top:12px">
+              <button id="pushSettings">Push settings</button>
+              <button id="chooseBest">Smart pick lens</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/desk.js"></script>
+  </body>
+</html>
