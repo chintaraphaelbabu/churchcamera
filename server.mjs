@@ -53,6 +53,7 @@ function getDevice(deviceId) {
       id: deviceId,
       label: 'Unknown camera',
       role: 'phone',
+      url: null,
       lastSeen: Date.now(),
       active: false,
       online: true,
@@ -82,6 +83,7 @@ function snapshot() {
       id: device.id,
       label: device.label,
       role: device.role,
+      url: device.url,
       lastSeen: device.lastSeen,
       active: device.active,
       online: device.online,
@@ -213,6 +215,7 @@ const server = http.createServer(async (req, res) => {
     const device = getDevice(deviceId);
     device.label = body.label || device.label;
     device.role = body.role || device.role;
+    device.url = body.url || device.url || null;
     device.lastSeen = Date.now();
     device.online = true;
     device.capabilities = body.capabilities || device.capabilities;

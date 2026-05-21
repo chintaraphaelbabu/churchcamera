@@ -146,6 +146,7 @@ fun CameraScreen() {
                 lifecycleOwner = lifecycleOwner,
                 settings = state.settings,
                 onFrame = viewModel::onFrame,
+                onBitmapFrame = viewModel::injectWebRtcBitmap,
                 onFacesDetected = viewModel::onFacesDetected,
                 onStatus = { viewModel.markCameraReady(true, it) },
             )
