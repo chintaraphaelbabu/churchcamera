@@ -27,9 +27,14 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var relayHeartbeatJob: Job? = null
 
+    private val webRtcManager = WebRtcManager(app)
+
     private val server = LocalBridgeServer(
         onRemoteUpdate = ::applyRemoteUpdate,
-        onConnectionStatusChanged = ::updateClientCount
+        onConnectionStatusChanged = ::updateClientCount,
+        onWebrtcOffer = { sdp, callback ->
+            webRtcManager.handleOffer(sdp, callback)
+        }
     )
 
     private val _state = MutableStateFlow(
@@ -228,6 +233,11 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun injectWebRtcBitmap(bitmap: android.graphics.Bitmap) {
+        webRtcManager.setStreamSize(state.value.settings.resolutionPreset.width, state.value.settings.resolutionPreset.height)
+        webRtcManager.injectBitmap(bitmap)
+    }
+
     fun onFacesDetected(faces: List<DetectedFace>) {
         _state.update { current ->
             var nextPanX = current.settings.panX
@@ -384,6 +394,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         server.stop()
+        webRtcManager.close()
         relayHeartbeatJob?.cancel()
         // unregister network callback
         try {

@@ -3,7 +3,7 @@ const fetch = require('node-fetch');
 const http = require('http');
 const https = require('https');
 
-const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://localhost:4455';
+const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://192.168.1.25:4455';
 const OBS_PASSWORD = process.env.OBS_PASSWORD || '';
 const SOURCE_NAME = process.env.SOURCE_NAME || 'Browser Full';
 const POLL_ON_START = process.env.POLL_ON_START !== 'false';

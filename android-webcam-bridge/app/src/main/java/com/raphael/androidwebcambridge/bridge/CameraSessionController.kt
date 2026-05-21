@@ -53,6 +53,7 @@ class CameraSessionController(context: Context) {
         lifecycleOwner: LifecycleOwner,
         settings: BridgeSettings,
         onFrame: (ByteArray) -> Unit,
+        onBitmapFrame: (Bitmap) -> Unit,
         onFacesDetected: (List<DetectedFace>) -> Unit,
         onStatus: (String) -> Unit,
     ) {
@@ -74,7 +75,7 @@ class CameraSessionController(context: Context) {
         val analysis = analysisBuilder.build()
 
         analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-            processImageProxy(imageProxy, onFrame, onFacesDetected)
+            processImageProxy(imageProxy, onFrame, onBitmapFrame, onFacesDetected)
         }
 
         provider?.unbindAll()
@@ -98,6 +99,7 @@ class CameraSessionController(context: Context) {
     private fun processImageProxy(
         imageProxy: ImageProxy,
         onFrame: (ByteArray) -> Unit,
+        onBitmapFrame: (Bitmap) -> Unit,
         onFacesDetected: (List<DetectedFace>) -> Unit
     ) {
         try {
@@ -125,8 +127,14 @@ class CameraSessionController(context: Context) {
                     }
             }
 
-            val jpeg = imageProxy.toConstantResolutionJpeg(activeSettings)
-            onFrame(jpeg)
+            val bitmap = imageProxy.toConstantResolutionBitmap(activeSettings)
+            if (bitmap != null) {
+                onBitmapFrame(bitmap)
+                
+                val streamOutput = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, activeSettings.jpegQuality.coerceIn(20, 100), streamOutput)
+                onFrame(streamOutput.toByteArray())
+            }
         } catch (e: Exception) {
         } finally {
             imageProxy.close()
@@ -171,7 +179,7 @@ class CameraSessionController(context: Context) {
         }
     }
 
-    private fun ImageProxy.toConstantResolutionJpeg(settings: BridgeSettings): ByteArray {
+    private fun ImageProxy.toConstantResolutionBitmap(settings: BridgeSettings): Bitmap? {
         val yBuffer = planes[0].buffer
         val vBuffer = planes[2].buffer
         
@@ -215,16 +223,16 @@ class CameraSessionController(context: Context) {
         yuvImage.compressToJpeg(cropRect, settings.jpegQuality.coerceIn(20, 100), streamOutput)
         val jpegData = streamOutput.toByteArray()
 
-        // 4. Force scaling if zoomed in, to keep MJPEG stream resolution constant for OBS
-        if (zoom > 1.05f) {
-            val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
-            val scaled = Bitmap.createScaledBitmap(bitmap, settings.resolutionPreset.width, settings.resolutionPreset.height, true)
-            val finalOutput = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, settings.jpegQuality.coerceIn(20, 100), finalOutput)
-            return finalOutput.toByteArray()
+        val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size) ?: return null
+        
+        val targetW = settings.resolutionPreset.width
+        val targetH = settings.resolutionPreset.height
+        
+        return if (bitmap.width != targetW || bitmap.height != targetH) {
+            Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+        } else {
+            bitmap
         }
-
-        return jpegData
     }
 
     fun close() {
