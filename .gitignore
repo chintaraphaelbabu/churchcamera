@@ -1,61 +1,34 @@
-# =========================
 # Android / Gradle
-# =========================
 .gradle/
 **/build/
 local.properties
-*.apk
-*.aab
-captures/
-.externalNativeBuild/
-.cxx/
 
-# =========================
-# Node.js
-# =========================
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Relay runtime files
-obs-relay/devices.json
-
-# Environment variables / secrets
-.env
-.env.*
-!.env.example
-
-# =========================
-# IDE / Editor
-# =========================
+# IDE metadata
 .idea/
-.vscode/
 *.iml
 
-# =========================
+# Node relay runtime files
+obs-relay/node_modules/
+obs-relay/devices.json
+
 # OS files
-# =========================
 .DS_Store
 Thumbs.db
 
-# =========================
-# Logs / temp
-# =========================
-*.log
-tmp/
-temp/
+# Secrets and signing keys
+*.env
+.env.*
+google-services.json
+*.jks
+*.keystore
+keystore.properties
+*.p12
+*.pem
+debug.keystore
 
-# =========================
-# OBS / CMake artifacts
-# =========================
-CMakeFiles/
-CMakeCache.txt
-cmake-build-*/
-*.obj
-*.o
-*.dll
-*.so
-*.dylib
-*.exe
+# Editors
+.vscode/
+.history/
+
+# Logs
+*.log

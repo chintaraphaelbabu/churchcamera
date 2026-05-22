@@ -1,4 +1,4 @@
-# Android Webcam Bridge (Pro)
+# StreamCam Pro
 
 This project turns your Android phone into a high-end, remote-controlled webcam for OBS and live streaming. It provides professional-grade features typically found in dedicated camera hardware, accessible via a browser-based dashboard.
 

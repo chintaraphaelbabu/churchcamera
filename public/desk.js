@@ -2,7 +2,6 @@ import { formatAgo, pickBestLens } from './shared.js';
 
 const els = {
   streamView: document.getElementById('streamView'),
-  fallbackView: document.getElementById('fallbackView'),
   deviceList: document.getElementById('deviceList'),
   remoteDeviceSelect: document.getElementById('remoteDeviceSelect'),
   remoteResolution: document.getElementById('remoteResolution'),
@@ -23,7 +22,6 @@ const els = {
 const state = {
   snapshot: { devices: [], liveTargetId: null },
   currentDeviceId: null,
-  peerConnection: null,
 };
 
 async function api(path, options = {}) {
@@ -43,111 +41,10 @@ function setOnline(online) {
   els.deskText.textContent = online ? 'connected' : 'offline';
 }
 
-function closeExistingConnection() {
-  if (state.peerConnection) {
-    try {
-      state.peerConnection.close();
-    } catch (e) {}
-    state.peerConnection = null;
-  }
-  if (els.streamView.srcObject) {
-    try {
-      els.streamView.srcObject.getTracks().forEach((track) => track.stop());
-    } catch (e) {}
-    els.streamView.srcObject = null;
-  }
-  els.streamView.style.display = 'none';
-  els.fallbackView.src = '';
-  els.fallbackView.style.display = 'none';
-}
-
-async function updateCurrentSelection(deviceId) {
-  if (state.currentDeviceId === deviceId) {
-    return;
-  }
-
-  closeExistingConnection();
+function updateCurrentSelection(deviceId) {
   state.currentDeviceId = deviceId;
-
-  if (!deviceId) return;
-
-  const device = state.snapshot.devices.find((d) => d.id === deviceId);
-  if (!device) return;
-
-  if (device.url) {
-    console.log(`Connecting to direct WebRTC on phone: ${device.url}`);
-    els.streamView.style.display = 'block';
-
-    try {
-      const pc = new RTCPeerConnection({
-        iceServers: [],
-      });
-      state.peerConnection = pc;
-
-      pc.addTransceiver('video', { direction: 'recvonly' });
-
-      pc.ontrack = (event) => {
-        console.log('Received WebRTC remote video stream track', event.streams);
-        if (event.streams && event.streams[0]) {
-          els.streamView.srcObject = event.streams[0];
-        }
-      };
-
-      pc.oniceconnectionstatechange = () => {
-        console.log('WebRTC ICE connection state:', pc.iceConnectionState);
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      if (pc.iceGatheringState !== 'complete') {
-        await new Promise((resolve) => {
-          function checkState() {
-            if (pc.iceGatheringState === 'complete') {
-              pc.removeEventListener('icegatheringstatechange', checkState);
-              resolve();
-            }
-          }
-          pc.addEventListener('icegatheringstatechange', checkState);
-          setTimeout(resolve, 800);
-        });
-      }
-
-      const localDesc = pc.localDescription;
-      console.log(`Sending SDP Offer to phone at: ${device.url}/api/webrtc/offer`);
-      const response = await fetch(`${device.url}/api/webrtc/offer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sdp: localDesc.sdp, type: 'offer' }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Phone WebRTC signaling POST failed: ${response.status}`);
-      }
-
-      const answerJson = await response.json();
-      if (answerJson.ok && answerJson.sdp) {
-        await pc.setRemoteDescription(
-          new RTCSessionDescription({
-            type: 'answer',
-            sdp: answerJson.sdp,
-          })
-        );
-        console.log('WebRTC low-latency streaming connected successfully.');
-      } else {
-        throw new Error(answerJson.error || 'Invalid signaling answer payload');
-      }
-    } catch (err) {
-      console.warn('WebRTC negotiation failed, falling back to MJPEG.', err);
-      closeExistingConnection();
-      state.currentDeviceId = deviceId;
-      els.fallbackView.style.display = 'block';
-      els.fallbackView.src = `/stream/${deviceId}.mjpg`;
-    }
-  } else {
-    console.log(`Device has no direct URL. Falling back to MJPEG: /stream/${deviceId}.mjpg`);
-    els.fallbackView.style.display = 'block';
-    els.fallbackView.src = `/stream/${deviceId}.mjpg`;
+  if (deviceId) {
+    els.streamView.src = `/stream/${deviceId}.mjpg`;
   }
 }
 

@@ -31,6 +31,7 @@ enum class ResolutionPreset(val label: String, val width: Int, val height: Int) 
 data class BridgeSettings(
     val lensFacing: LensFacingOption = LensFacingOption.BACK,
     val aiHint: AiLensHint = AiLensHint.BALANCED,
+    val physicalZoomRatio: Float = 1f,
     val zoomRatio: Float = 1f,
     val panX: Float = 0f,
     val panY: Float = 0f,
@@ -45,10 +46,13 @@ data class BridgeSettings(
     val resolutionPreset: ResolutionPreset = ResolutionPreset.P720,
     val jpegQuality: Int = 72,
     val bitrateMbps: Int = 4,
+    val focusVelocity: Float = 0.1f,
+    val zoomVelocity: Float = 0.1f,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("lensFacing", lensFacing.name)
         .put("aiHint", aiHint.name)
+        .put("physicalZoomRatio", physicalZoomRatio)
         .put("zoomRatio", zoomRatio)
         .put("panX", panX)
         .put("panY", panY)
@@ -63,6 +67,8 @@ data class BridgeSettings(
         .put("resolutionPreset", resolutionPreset.name)
         .put("jpegQuality", jpegQuality)
         .put("bitrateMbps", bitrateMbps)
+        .put("focusVelocity", focusVelocity)
+        .put("zoomVelocity", zoomVelocity)
 
     companion object {
         fun fromQuery(query: Map<String, String?>, current: BridgeSettings): BridgeSettings {
@@ -74,6 +80,7 @@ data class BridgeSettings(
             return current.copy(
                 lensFacing = read("lensFacing", LensFacingOption::valueOf, current.lensFacing),
                 aiHint = read("aiHint", AiLensHint::valueOf, current.aiHint),
+                physicalZoomRatio = read("physicalZoomRatio", String::toFloat, current.physicalZoomRatio),
                 zoomRatio = read("zoomRatio", String::toFloat, current.zoomRatio),
                 panX = read("panX", String::toFloat, current.panX),
                 panY = read("panY", String::toFloat, current.panY),
@@ -90,6 +97,8 @@ data class BridgeSettings(
                 resolutionPreset = read("resolutionPreset", ResolutionPreset::valueOf, current.resolutionPreset),
                 jpegQuality = read("jpegQuality", String::toInt, current.jpegQuality),
                 bitrateMbps = read("bitrateMbps", String::toInt, current.bitrateMbps),
+                focusVelocity = read("focusVelocity", String::toFloat, current.focusVelocity),
+                zoomVelocity = read("zoomVelocity", String::toFloat, current.zoomVelocity),
             )
         }
     }
@@ -128,7 +137,9 @@ data class BridgeState(
     val tallyState: TallyState = TallyState.IDLE,
     val cameraRebindToken: Int = 0,
     val localIpAddress: String = "",
+    val activeRail: RailType? = null,
 ) {
+    enum class RailType { FOCUS, ZOOM, ISO, SHUTTER }
     fun toJson(): JSONObject = JSONObject()
         .put("serverRunning", serverRunning)
         .put("streaming", streaming)
