@@ -1,139 +1,101 @@
 # Phone Webcam Bridge
 
-This workspace contains two connected pieces:
+This repository contains two cooperating components for turning Android phones into OBS camera sources with tally support:
 
-- the Android webcam bridge in [android-webcam-bridge](android-webcam-bridge)
-- the OBS tally relay in [obs-relay](obs-relay)
+- `android-webcam-bridge` — Android app that exposes a local HTTP bridge (port `8787`), serves MJPEG frames, and accepts tally updates.
+- `obs-relay` — Node.js relay that watches OBS (via obs-websocket v5), tracks registered phones, and posts tally state back to each phone.
 
-The Android app is the primary camera surface. The relay watches OBS, tracks which phone is fresh, and pushes tally state back to each phone.
+This README consolidates setup, run instructions, and troubleshooting in one place.
 
-## What This Does
+**Key facts**
+- OBS WebSocket v5 default port: `4455`
+- Relay admin UI (default): `http://localhost:3000`
+- Android bridge local port: `8787`
+- Runtime device state is stored in `obs-relay/devices.json` (this file is gitignored)
 
-The full flow is:
+## Quick start
 
-1. The Android app runs on each phone and exposes a local HTTP bridge on port `8787`.
-2. The relay registers each phone with its callback URL.
-3. OBS sends scene and source state to the relay through `obs-websocket` v5 on port `4455`.
-4. The relay posts `PROGRAM`, `PREVIEW`, or `IDLE` back to each phone.
-5. The admin page shows registered phones, freshness, latency, and live diagnostics.
+1. Start OBS and enable obs-websocket v5 on port `4455`.
+2. Start the relay:
 
-## Fast Start
-
-If you only want the tally path working, follow this order:
-
-1. Start OBS and enable `obs-websocket` v5 on port `4455`.
-2. Start the relay in [obs-relay](obs-relay).
-3. Open the relay admin page at `http://localhost:3000`.
-4. Open the Android app on each phone and register it to the relay host.
-5. Make sure the phone source name matches the Browser Source name in OBS.
-
-## Relay Setup
-
-The relay watches OBS and broadcasts tally state to all registered phones.
-
-### Relay behavior
-
-- `PROGRAM` means the source is live in OBS program.
-- `PREVIEW` means the source is visible in OBS preview.
-- `IDLE` means the source is in neither place.
-- Each phone keeps a heartbeat so the relay knows whether it is fresh.
-- The admin UI includes a live Diagnostic Assistant and real-time device updates.
-
-### Relay environment variables
-
-- `OBS_ADDRESS` - OBS websocket address, default `ws://localhost:4455`
-- `OBS_PASSWORD` - OBS websocket password if enabled
-- `SOURCE_NAME` - default Browser Source name, default `Browser Full`
-- `ADMIN_PORT` - relay admin port, default `3000`
-- `POLL_ON_START` - set to `false` to skip the first tally scan
-- `DEVICE_STALE_MS` - freshness window in milliseconds, default `10000`
-- `DEVICE_LATENCY_HISTORY_LIMIT` - number of latency samples kept per device, default `12`
-
-### Relay files
-
-- [obs-relay/relay.js](obs-relay/relay.js) - OBS connection, device registry, tally posting, diagnostics, live admin events
-- [obs-relay/admin/index.html](obs-relay/admin/index.html) - admin dashboard
-- [obs-relay/devices.json](obs-relay/devices.json) - local device registry storage
-- [obs-relay/start-relay.bat](obs-relay/start-relay.bat) - Windows launch helper
-
-### Relay admin page
-
-Open:
-
-```text
-http://localhost:3000
+```powershell
+cd obs-relay
+npm install
+npm start
 ```
 
-From there you can:
+On Windows there is a helper `obs-relay/start-relay.bat` you can use.
 
-- register a phone manually
-- change its source name
-- view freshness and latency
-- see a live diagnostic summary
-- delete stale devices
+3. Open the relay admin UI at `http://localhost:3000` and confirm the dashboard loads.
+4. Open the Android app on each phone and register the relay host (use `http://<relay-ip>:3000`).
+5. In OBS, create a Browser Source and use the same source name that you configure for the phone(s).
 
-## Android App
+## Running the relay
 
-The Android app is the phone-side camera bridge and local tally endpoint.
+- The relay uses these environment variables (defaults shown):
 
-### Android behavior
+```
+OBS_ADDRESS=ws://localhost:4455
+OBS_PASSWORD=
+SOURCE_NAME=Browser Full
+ADMIN_PORT=3000
+DEVICE_STALE_MS=10000
+DEVICE_LATENCY_HISTORY_LIMIT=12
+```
 
-- It hosts a local HTTP server on port `8787`.
-- It registers itself with the relay using its callback URL.
-- It sends heartbeat pings so the relay can keep the device fresh.
-- It receives tally updates from the relay and updates the phone UI.
-- It supports the native camera, exposure, focus, framing, and MJPEG output for OBS.
+Adjust values by exporting environment variables before starting the relay.
 
-### Android files
+## Admin UI and diagnostics
 
-- [android-webcam-bridge](android-webcam-bridge) - Android project root
-- [android-webcam-bridge/app/src/main/java/com/raphael/androidwebcambridge/bridge/BridgeViewModel.kt](android-webcam-bridge/app/src/main/java/com/raphael/androidwebcambridge/bridge/BridgeViewModel.kt) - relay registration and heartbeat logic
-- [android-webcam-bridge/app/src/main/java/com/raphael/androidwebcambridge/bridge/LocalBridgeServer.kt](android-webcam-bridge/app/src/main/java/com/raphael/androidwebcambridge/bridge/LocalBridgeServer.kt) - local HTTP bridge server
+- The admin UI uses Server-Sent Events (`/events`) for live updates and includes a Diagnostic Assistant (`/api/assistant`).
+- The device table shows current latency (ms) and a small history sparkline. Aim for <50ms for very low-latency setups, but hardware/network factors dominate.
 
-### Android setup notes
+## Android app (developer notes)
 
-- Use the relay host in the form `http://<relay-ip>:3000`.
-- Each phone can keep its own relay registration.
-- If the phone changes IP, reopen the app or register again.
+- Project: `android-webcam-bridge`
+- The app runs a small local HTTP server on port `8787` and registers itself with the relay.
+- To build locally (Windows):
 
-## OBS Setup
+```powershell
+cd android-webcam-bridge
+.\gradlew.bat assembleDebug
+```
 
-Use OBS WebSocket v5 and set the Browser Source name you want the relay to track.
+Notes: you must have a JDK installed and `JAVA_HOME` set for Gradle builds.
 
-### Recommended OBS settings
+If you don't want to build, install the debug APK on a device/emulator and open the app.
 
-- OBS websocket port: `4455`
-- Browser Source name: a stable name like `Browser Full` or `phone1`
-- Each phone may map to a different source name if you want separate tallies
+## OBS configuration
 
-## Latency
+- Use obs-websocket v5 on port `4455`.
+- Use a stable Browser Source name (e.g., `Browser Full`) and ensure it matches the phone's configured source name.
 
-The admin table now shows a per-device tally latency value and a compact history sparkline.
+## Latency and performance
 
-If you need very low latency, keep in mind the full path includes:
+Latency depends on OBS event propagation, relay processing, network RTT, and phone-side handling. Improvements in this repo include:
+- Relay reuses HTTP keep-alive connections to phones.
+- Phone bridge returns HTTP responses immediately and applies updates asynchronously to reduce request latency.
 
-- OBS scene change detection
-- relay processing
-- network transfer to the phone
-- phone-side HTTP handling and camera/UI work
-
-The relay now uses keep-alive HTTP connections, and the phone bridge answers tally requests immediately before applying the update in the background.
+If latency remains high, profile the phone's bridge and the network path.
 
 ## Troubleshooting
 
-- If the relay does not connect to OBS, confirm websocket v5 is enabled and the port is `4455`.
-- If a phone does not register, confirm the relay host is reachable from the phone.
-- If a phone is stale, save the relay host again on the phone.
-- If tally never changes, check that the source name matches the OBS Browser Source exactly.
-- If latency is still high, the bottleneck is usually the phone-side bridge or the network path rather than the admin UI.
+- Relay won't connect to OBS: verify obs-websocket v5 and port `4455`.
+- Phones not registering: verify the relay host is reachable from the phone and the phone's saved host includes protocol (e.g., `http://`).
+- Phone appears stale: reopen the Android app or re-register; ensure heartbeats reach the relay.
 
-## Repo Layout
+## Repo layout
 
-- [android-webcam-bridge](android-webcam-bridge) - Android camera bridge app
-- [obs-relay](obs-relay) - OBS tally relay and admin UI
-- [server.mjs](server.mjs) - top-level helper script
-- [public](public) - browser prototype assets
+- `android-webcam-bridge/` — Android app project
+- `obs-relay/` — Node relay and admin UI
+- `public/` — browser prototype assets
+- `server.mjs` — helper scripts
 
-## Notes
+## Repository hygiene
 
-This repository now treats the root README as the main documentation entry point. The old per-folder README and HOWTO files have been folded into this file so there is one place to start.
+- The repository ignores build artifacts and IDE settings via `.gitignore` (it includes `.idea/`, `**/build/`, and `obs-relay/devices.json`).
+- You may delete `.idea/` safely; keep `app.iml`/`modules.xml` if you rely on IntelliJ module metadata or back them up.
+
+---
+
+If you'd like, I can back up `workspace.xml`, `modules.xml`, and `app.iml` before you delete `.idea/`, or I can stage a commit with the README update. Which would you prefer?

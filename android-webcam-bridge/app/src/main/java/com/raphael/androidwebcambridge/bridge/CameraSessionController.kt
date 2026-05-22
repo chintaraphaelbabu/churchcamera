@@ -53,7 +53,6 @@ class CameraSessionController(context: Context) {
         lifecycleOwner: LifecycleOwner,
         settings: BridgeSettings,
         onFrame: (ByteArray) -> Unit,
-        onBitmapFrame: (Bitmap) -> Unit,
         onFacesDetected: (List<DetectedFace>) -> Unit,
         onStatus: (String) -> Unit,
     ) {
@@ -75,7 +74,7 @@ class CameraSessionController(context: Context) {
         val analysis = analysisBuilder.build()
 
         analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-            processImageProxy(imageProxy, onFrame, onBitmapFrame, onFacesDetected)
+            processImageProxy(imageProxy, onFrame, onFacesDetected)
         }
 
         provider?.unbindAll()
@@ -99,7 +98,6 @@ class CameraSessionController(context: Context) {
     private fun processImageProxy(
         imageProxy: ImageProxy,
         onFrame: (ByteArray) -> Unit,
-        onBitmapFrame: (Bitmap) -> Unit,
         onFacesDetected: (List<DetectedFace>) -> Unit
     ) {
         try {
@@ -127,14 +125,8 @@ class CameraSessionController(context: Context) {
                     }
             }
 
-            val bitmap = imageProxy.toConstantResolutionBitmap(activeSettings)
-            if (bitmap != null) {
-                onBitmapFrame(bitmap)
-                
-                val streamOutput = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, activeSettings.jpegQuality.coerceIn(20, 100), streamOutput)
-                onFrame(streamOutput.toByteArray())
-            }
+            val jpeg = imageProxy.toConstantResolutionJpeg(activeSettings)
+            onFrame(jpeg)
         } catch (e: Exception) {
         } finally {
             imageProxy.close()
@@ -147,18 +139,36 @@ class CameraSessionController(context: Context) {
         val control = activeCamera.cameraControl
         val c2Control = camera2Control ?: Camera2CameraControl.from(control).also { camera2Control = it }
 
+        // Apply Physical Hardware Zoom
+        control.setZoomRatio(settings.physicalZoomRatio)
+
         val builder = CaptureRequestOptions.Builder()
         
-        if (settings.zoomRatio > 1.1f) {
-            onStatus(String.format(java.util.Locale.US, "Framing: %.1fx", settings.zoomRatio))
+        if (settings.physicalZoomRatio > 1.1f || settings.zoomRatio > 1.1f) {
+            onStatus(String.format(java.util.Locale.US, "Zoom: %.1fx (Digital: %.1fx)", settings.physicalZoomRatio, settings.zoomRatio))
         }
 
         // Manual Exposure
-        if (settings.iso > 0 && settings.shutterSpeedMs > 0) {
+        if (settings.iso > 0 || settings.shutterSpeedMs > 0) {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            builder.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, settings.iso)
-            val exposureNs = (settings.shutterSpeedMs.toLong() * 1_000_000L).coerceIn(100_000L, 1_000_000_000L)
+            
+            // Apply ISO if manual, otherwise default to a mid-range value (e.g., 400) or keep auto?
+            // Usually, if we turn AE off, we must provide both. 
+            // We'll use a sensible default (1/50s and ISO 400) if one is auto.
+            val targetIso = if (settings.iso > 0) settings.iso else 400
+            val targetShutterMs = if (settings.shutterSpeedMs > 0) settings.shutterSpeedMs else 20
+            
+            builder.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, targetIso)
+            val exposureNs = (targetShutterMs.toLong() * 1_000_000L).coerceIn(100_000L, 1_000_000_000L)
             builder.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureNs)
+            
+            if (settings.iso > 0 && settings.shutterSpeedMs > 0) {
+                onStatus("Manual Exposure: ISO $targetIso, ${targetShutterMs}ms")
+            } else if (settings.iso > 0) {
+                onStatus("Manual ISO: $targetIso")
+            } else {
+                onStatus("Manual Shutter: ${targetShutterMs}ms")
+            }
         } else {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, settings.exposureCompensation)
@@ -179,7 +189,7 @@ class CameraSessionController(context: Context) {
         }
     }
 
-    private fun ImageProxy.toConstantResolutionBitmap(settings: BridgeSettings): Bitmap? {
+    private fun ImageProxy.toConstantResolutionJpeg(settings: BridgeSettings): ByteArray {
         val yBuffer = planes[0].buffer
         val vBuffer = planes[2].buffer
         
@@ -223,16 +233,16 @@ class CameraSessionController(context: Context) {
         yuvImage.compressToJpeg(cropRect, settings.jpegQuality.coerceIn(20, 100), streamOutput)
         val jpegData = streamOutput.toByteArray()
 
-        val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size) ?: return null
-        
-        val targetW = settings.resolutionPreset.width
-        val targetH = settings.resolutionPreset.height
-        
-        return if (bitmap.width != targetW || bitmap.height != targetH) {
-            Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
-        } else {
-            bitmap
+        // 4. Force scaling if zoomed in, to keep MJPEG stream resolution constant for OBS
+        if (zoom > 1.05f) {
+            val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
+            val scaled = Bitmap.createScaledBitmap(bitmap, settings.resolutionPreset.width, settings.resolutionPreset.height, true)
+            val finalOutput = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, settings.jpegQuality.coerceIn(20, 100), finalOutput)
+            return finalOutput.toByteArray()
         }
+
+        return jpegData
     }
 
     fun close() {

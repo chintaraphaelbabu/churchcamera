@@ -16,34 +16,28 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
 
 class BridgeViewModel(application: Application) : AndroidViewModel(application) {
     private val app: Application = application
-    // --- Relay registration state must exist before init() runs because startup may trigger registration.
-    private val prefs = app.getSharedPreferences("bridge_prefs", Context.MODE_PRIVATE)
+    private val prefs = application.getSharedPreferences("bridge_prefs", Context.MODE_PRIVATE)
     private var networkCallbackRegistered = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var relayHeartbeatJob: Job? = null
 
-    private val webRtcManager = WebRtcManager(app)
-
+    private val relayManager = RelayManager(application, viewModelScope)
     private val server = LocalBridgeServer(
         onRemoteUpdate = ::applyRemoteUpdate,
-        onConnectionStatusChanged = ::updateClientCount,
-        onWebrtcOffer = { sdp, callback ->
-            webRtcManager.handleOffer(sdp, callback)
-        }
+        onConnectionStatusChanged = ::updateClientCount
     )
 
     private val _state = MutableStateFlow(
         BridgeState(
             serverRunning = false,
-            dashboardUrl = "http://<phone-ip>:8787/dashboard",
-            streamUrl = "http://<phone-ip>:8787/stream.mjpg",
             localIpAddress = findLocalIpv4Address(),
             statusMessage = "Starting",
+            settings = BridgeSettings(
+                focusVelocity = prefs.getFloat("focus_velocity", 0.1f),
+                zoomVelocity = prefs.getFloat("zoom_velocity", 0.1f)
+            )
         ),
     )
     val state: StateFlow<BridgeState> = _state.asStateFlow()
@@ -54,50 +48,23 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setRelayHost(host: String) {
-        val trimmedHost = normalizeRelayHost(host) ?: return
-        prefs.edit().putString("relay_host", trimmedHost).apply()
-        // attempt immediate register
-        viewModelScope.launch { registerWithRelay(trimmedHost, getRelaySourceName()) }
-        startRelayHeartbeat()
+        relayManager.setRelayHost(host)
     }
 
     fun setRelaySourceName(sourceName: String) {
-        val trimmedSourceName = sourceName.trim()
-        prefs.edit().putString("relay_source_name", trimmedSourceName).apply()
-        viewModelScope.launch { registerWithRelay(getRelayHost(), trimmedSourceName) }
-        startRelayHeartbeat()
+        relayManager.setRelaySourceName(sourceName)
     }
 
     fun refreshRelayRegistration() {
-        viewModelScope.launch { registerWithRelay(getRelayHost(), getRelaySourceName()) }
-        startRelayHeartbeat()
+        relayManager.refreshRelayRegistration()
     }
 
     fun pauseRelayHeartbeat() {
-        relayHeartbeatJob?.cancel()
-        relayHeartbeatJob = null
+        relayManager.pauseRelayHeartbeat()
     }
 
     fun pingRelayNow() {
-        viewModelScope.launch {
-            sendRelayPing()
-        }
-    }
-
-    private fun getRelayHost(): String? = prefs.getString("relay_host", null)
-    private fun getRelaySourceName(): String? = prefs.getString("relay_source_name", null)
-    private fun getRelayDeviceId(): String? = prefs.getString("relay_device_id", null)
-    private fun saveRelayDeviceId(id: String?) {
-        prefs.edit().putString("relay_device_id", id).apply()
-    }
-
-    private fun normalizeRelayHost(host: String?): String? {
-        val trimmed = host?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        return when {
-            trimmed.startsWith("http://", ignoreCase = true) -> trimmed
-            trimmed.startsWith("https://", ignoreCase = true) -> trimmed
-            else -> "http://$trimmed"
-        }
+        relayManager.pingRelayNow()
     }
 
     private fun startNetworkWatch() {
@@ -107,11 +74,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         try {
             val cb = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    viewModelScope.launch { registerWithRelay() }
-                }
-
-                override fun onLost(network: Network) {
-                    // no-op
+                    viewModelScope.launch { relayManager.registerWithRelay() }
                 }
             }
             cm.registerNetworkCallback(request, cb)
@@ -120,106 +83,12 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         } catch (_: Exception) {}
     }
 
-    private suspend fun registerWithRelay(hostOverride: String? = null, sourceNameOverride: String? = null) {
-        val host = normalizeRelayHost(hostOverride) ?: normalizeRelayHost(getRelayHost()) ?: return
-        val ip = findLocalIpv4Address()
-        val callbackBase = "http://$ip:8787"
-        val name = android.os.Build.MODEL ?: "Android Phone"
-        val sourceName = sourceNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: getRelaySourceName()?.takeIf { it.isNotBlank() } ?: name
-        val existingId = getRelayDeviceId()
-        val payload = if (existingId.isNullOrBlank()) {
-            "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
-        } else {
-            "{\"id\":\"$existingId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
-        }
-
-        repeat(3) { attempt ->
-            try {
-                withContext(Dispatchers.IO) {
-                    val url = java.net.URL(host.trimEnd('/') + "/api/register")
-                    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-                        requestMethod = "POST"
-                        doOutput = true
-                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                        connectTimeout = 10000
-                        readTimeout = 10000
-                    }
-                    conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-                    val code = conn.responseCode
-                    if (code in 200..299) {
-                        val responseText = conn.inputStream.bufferedReader().use { it.readText() }
-                        val idMatch = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(responseText)
-                        saveRelayDeviceId(idMatch?.groupValues?.getOrNull(1) ?: existingId)
-                        _state.update { it.copy(statusMessage = "Registered with relay") }
-                        startRelayHeartbeat()
-                        conn.disconnect()
-                        return@withContext
-                    }
-                    conn.disconnect()
-                    _state.update { it.copy(statusMessage = "Relay register failed: $code") }
-                }
-            } catch (e: Exception) {
-                val message = e.message ?: e::class.java.simpleName
-                _state.update { it.copy(statusMessage = "Relay register error: $message") }
-                if (attempt < 2) {
-                    delay(1500L)
-                }
-            }
-        }
-    }
-
-    private suspend fun sendRelayPing() {
-        val relayHost = normalizeRelayHost(getRelayHost()) ?: return
-        val deviceId = getRelayDeviceId()
-        val ip = findLocalIpv4Address()
-        val callbackBase = "http://$ip:8787"
-        val name = android.os.Build.MODEL ?: "Android Phone"
-        val sourceName = getRelaySourceName()?.takeIf { it.isNotBlank() } ?: name
-
-        try {
-            withContext(Dispatchers.IO) {
-                val url = java.net.URL(relayHost.trimEnd('/') + "/api/ping")
-                val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                }
-                val payload = if (deviceId.isNullOrBlank()) {
-                    "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
-                } else {
-                    "{\"id\":\"$deviceId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
-                }
-                conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-                conn.responseCode
-                conn.disconnect()
-            }
-        } catch (_: Exception) {
-            // best effort only
-        }
-    }
-
-    private fun startRelayHeartbeat() {
-        val host = normalizeRelayHost(getRelayHost()) ?: return
-        if (relayHeartbeatJob?.isActive == true) return
-
-        relayHeartbeatJob = viewModelScope.launch {
-            sendRelayPing()
-            while (true) {
-                delay(10_000L)
-                sendRelayPing()
-            }
-        }
-    }
-
     private var lastStateUpdateAt = 0L
     private var tallyHoldJob: Job? = null
 
     fun onFrame(frame: ByteArray) {
         server.submitFrame(frame)
         
-        // Update frame timestamp occasionally to keep UI reactive without flooding
         val now = System.currentTimeMillis()
         if (now - lastStateUpdateAt > 1000L) {
             lastStateUpdateAt = now
@@ -231,11 +100,6 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
             }
             server.updateState(_state.value)
         }
-    }
-
-    fun injectWebRtcBitmap(bitmap: android.graphics.Bitmap) {
-        webRtcManager.setStreamSize(state.value.settings.resolutionPreset.width, state.value.settings.resolutionPreset.height)
-        webRtcManager.injectBitmap(bitmap)
     }
 
     fun onFacesDetected(faces: List<DetectedFace>) {
@@ -279,13 +143,11 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         server.updateState(_state.value)
     }
 
-    fun setZoom(zoomRatio: Float) = updateSettings { it.copy(zoomRatio = zoomRatio) }
+    fun setZoom(zoomRatio: Float) = updateSettings { it.copy(physicalZoomRatio = zoomRatio) }
 
-    fun setExposure(index: Int) = updateSettings { it.copy(exposureCompensation = index) }
+    fun setDashboardZoom(zoomRatio: Float) = updateSettings { it.copy(zoomRatio = zoomRatio) }
 
     fun setLens(lensFacing: LensFacingOption) = updateSettings(rebind = true) { it.copy(lensFacing = lensFacing, panX = 0f, panY = 0f, zoomRatio = 1.0f) }
-
-    fun setAiHint(hint: AiLensHint) = updateSettings(rebind = true) { it.copy(aiHint = hint, lensFacing = aiHintToLensFacing(hint)) }
 
     fun setResolution(preset: ResolutionPreset) = updateSettings(rebind = true) { it.copy(resolutionPreset = preset) }
 
@@ -293,18 +155,27 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setIso(value: Int) = updateSettings { it.copy(iso = value) }
 
+    fun setActiveRail(rail: BridgeState.RailType?) {
+        _state.update { it.copy(activeRail = rail) }
+    }
+
     fun setShutterSpeed(valueMs: Int) = updateSettings { it.copy(shutterSpeedMs = valueMs) }
 
     fun setFocusDistance(valueDiopters: Float) = updateSettings { it.copy(focusDistanceDiopters = valueDiopters, focusAuto = false) }
 
-    fun setAutoFocus(enabled: Boolean) = updateSettings { it.copy(focusAuto = enabled) }
+    fun setFocusVelocity(velocity: Float) {
+        prefs.edit().putFloat("focus_velocity", velocity).apply()
+        updateSettings { it.copy(focusVelocity = velocity) }
+    }
 
-    fun setJpegQuality(value: Int) = updateSettings { it.copy(jpegQuality = value) }
+    fun setZoomVelocity(velocity: Float) {
+        prefs.edit().putFloat("zoom_velocity", velocity).apply()
+        updateSettings { it.copy(zoomVelocity = velocity) }
+    }
 
     fun applyRemoteUpdate(query: Map<String, String?>) {
-        // allow remote setting of relay host via query param `relayHost`
-        query["relayHost"]?.let { rh -> if (!rh.isNullOrBlank()) setRelayHost(rh) }
-        query["relaySourceName"]?.let { rn -> if (!rn.isNullOrBlank()) setRelaySourceName(rn) }
+        query["relayHost"]?.let { rh -> if (rh.isNotBlank()) setRelayHost(rh) }
+        query["relaySourceName"]?.let { rn -> if (rn.isNotBlank()) setRelaySourceName(rn) }
         val newState = _state.updateAndGet { current ->
             val nextSettings = BridgeSettings.fromQuery(query, current.settings)
             val tallyStr = query["tallyState"]
@@ -325,11 +196,8 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         }
         server.updateState(newState)
 
-        // If the new tally is IDLE but we were previously PROGRAM, hold briefly
-        // to avoid flicker when OBS temporarily stops sending events.
         if (newState.tallyState == TallyState.IDLE) {
             if (_state.value.tallyState == TallyState.PROGRAM) {
-                // schedule a delayed downgrade unless another update arrives
                 tallyHoldJob?.cancel()
                 tallyHoldJob = viewModelScope.launch {
                     delay(1500L)
@@ -338,7 +206,6 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         } else {
-            // any non-IDLE tally cancels pending hold
             tallyHoldJob?.cancel()
             tallyHoldJob = null
         }
@@ -362,7 +229,9 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun updateSettings(rebind: Boolean = false, transform: (BridgeSettings) -> BridgeSettings) {
+    fun setFocusAuto(auto: Boolean) = updateSettings { it.copy(focusAuto = auto) }
+
+    fun updateSettings(rebind: Boolean = false, transform: (BridgeSettings) -> BridgeSettings) {
         val newState = _state.updateAndGet { current ->
             current.copy(
                 settings = transform(current.settings),
@@ -387,16 +256,13 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             server.updateState(_state.value)
-            // if a relay host was already saved, register and start heartbeating now
-            registerWithRelay()
+            relayManager.registerWithRelay()
         }
     }
 
     override fun onCleared() {
         server.stop()
-        webRtcManager.close()
-        relayHeartbeatJob?.cancel()
-        // unregister network callback
+        relayManager.pauseRelayHeartbeat()
         try {
             val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             networkCallback?.let { cb -> cm?.unregisterNetworkCallback(cb) }
