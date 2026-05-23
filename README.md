@@ -3,9 +3,24 @@
 This repository contains two cooperating components for turning Android phones into OBS camera sources with tally support:
 
 - `android-webcam-bridge` — Android app that exposes a local HTTP bridge (port `8787`), serves MJPEG frames, and accepts tally updates.
-- `obs-relay` — Node.js relay that watches OBS (via obs-websocket v5), tracks registered phones, and posts tally state back to each phone.
+- `obs-relay` — Node.js relay that watches OBS via obs-websocket v5, tracks registered phones, and posts tally state back to each phone.
 
 This README consolidates setup, run instructions, and troubleshooting in one place.
+
+## Features
+
+- Android phone camera bridge with live MJPEG output for OBS Browser Source.
+- Remote tally updates from OBS with `PROGRAM`, `PREVIEW`, and `IDLE` states.
+- Phone registration and heartbeat tracking so stale devices fall out automatically.
+- Real-time admin dashboard with live device updates over Server-Sent Events.
+- Diagnostic Assistant for quick troubleshooting and status summaries.
+- Per-device latency tracking with a compact sparkline history.
+- Lower-latency relay-to-phone communication using HTTP keep-alive.
+- Non-blocking phone bridge handling so tally responses return quickly.
+- Built-in OBS websocket v5 integration on port `4455`.
+- Local relay admin UI on `http://localhost:3000`.
+- Android app dashboard for camera controls, focus, zoom, and exposure.
+- Repository hygiene for a GitHub-friendly workflow, including a root `.gitignore` and release-ready notes.
 
 **Key facts**
 - OBS WebSocket v5 default port: `4455`
@@ -64,6 +79,25 @@ cd android-webcam-bridge
 Notes: you must have a JDK installed and `JAVA_HOME` set for Gradle builds.
 
 If you don't want to build, install the debug APK on a device/emulator and open the app.
+
+### Where the APK is
+
+- Local debug APK: `android-webcam-bridge/app/build/outputs/apk/debug/app-debug.apk`
+- Release APK output, if you build the release variant later: `android-webcam-bridge/app/build/outputs/apk/release/`
+- GitHub Actions now uploads the debug APK as a release asset when you push a tag like `v1.0.0`
+
+### GitHub Releases
+
+To create a GitHub Release with the APK attached:
+
+1. Push a version tag, for example:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+2. GitHub Actions builds `app-debug.apk` and attaches it to the release.
 
 ## OBS configuration
 
