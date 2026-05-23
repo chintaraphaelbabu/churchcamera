@@ -1,135 +1,73 @@
-# Phone Webcam Bridge
+# StreamCam Pro (Android Webcam Bridge)
 
-This repository contains two cooperating components for turning Android phones into OBS camera sources with tally support:
+**StreamCam Pro** is a high-performance Android application that turns your smartphone into a professional-grade OBS camera source with integrated Tally support and remote hardware control.
 
-- `android-webcam-bridge` — Android app that exposes a local HTTP bridge (port `8787`), serves MJPEG frames, and accepts tally updates.
-- `obs-relay` — Node.js relay that watches OBS via obs-websocket v5, tracks registered phones, and posts tally state back to each phone.
+## 🚀 Key Features
 
-This README consolidates setup, run instructions, and troubleshooting in one place.
+### 🎥 Professional Camera Control
+- **Manual Exposure**: Precise control over ISO (100–6400) and Shutter Speed (Auto to 1/500s).
+- **Advanced Focusing**: Toggle between Continuous Auto Focus and Manual Focus with an infinity lock.
+- **Dual-Layer Zoom**: 
+    - **Physical Zoom**: Controls the phone's actual camera lenses for maximum quality.
+    *   **Digital Crop**: Independent digital zoom available via the web dashboard for fine reframing.
+- **Switchable Lenses**: Toggle between Front and Back cameras seamlessly.
+- **Resolution Presets**: Support for 720p, 1080p, 1440p, and 4K output.
 
-## Features
+### 🕹️ Tactile Hardware Interaction
+- **Volume Key Control**: Use physical volume buttons to pull focus or zoom smoothly.
+    - Tap the **Focus Rail** (left) to adjust focus distance via volume keys.
+    - Tap the **Zoom Rail** (right) to adjust hardware zoom via volume keys.
+    - Long-press **ISO** or **Shutter** tiles to adjust exposure via volume keys.
+- **Custom Sensitivity**: Swipe from the **right edge** of the screen to open the **Velocity Settings** drawer. Customize exactly how fast focus and zoom move when using physical buttons. These settings are saved persistently.
 
-- Android phone camera bridge with live MJPEG output for OBS Browser Source.
-- Remote tally updates from OBS with `PROGRAM`, `PREVIEW`, and `IDLE` states.
-- Phone registration and heartbeat tracking so stale devices fall out automatically.
-- Real-time admin dashboard with live device updates over Server-Sent Events.
-- Diagnostic Assistant for quick troubleshooting and status summaries.
-- Per-device latency tracking with a compact sparkline history.
-- Lower-latency relay-to-phone communication using HTTP keep-alive.
-- Non-blocking phone bridge handling so tally responses return quickly.
-- Built-in OBS websocket v5 integration on port `4455`.
-- Local relay admin UI on `http://localhost:3000`.
-- Android app dashboard for camera controls, focus, zoom, and exposure.
-- Repository hygiene for a GitHub-friendly workflow, including a root `.gitignore` and release-ready notes.
+### 🔴 OBS Integration & Tally
+- **Live Tally Support**: Real-time on-screen tally borders:
+    - **Red Border**: Program (Live on air)
+    - **Orange Border**: Preview (Selected in OBS)
+    - **Green Border**: Active/Connected
+- **MJPEG Streaming**: Low-latency stream compatible with OBS Browser Source.
+- **Remote Dashboard**: A built-in web server allows you to control the camera entirely from your laptop's browser.
 
-**Key facts**
-- OBS WebSocket v5 default port: `4455`
-- Relay admin UI (default): `http://localhost:3000`
-- Android bridge local port: `8787`
-- Runtime device state is stored in `obs-relay/devices.json` (this file is gitignored)
+## 🛠️ Setup Instructions
 
-## Quick start
+### 1. Android App Setup
+- Build the project using Android Studio or download the latest APK.
+- Ensure your phone and laptop are on the same Wi-Fi network.
+- Note the IP address displayed in the app's Info Overlay (accessible via the Gear icon).
 
-1. Start OBS and enable obs-websocket v5 on port `4455`.
+### 2. OBS & Relay Setup
+StreamCam Pro works best with the `obs-relay` (Node.js component included in the root of this repo).
+1. Enable **obs-websocket v5** in OBS (Port 4455).
 2. Start the relay:
+   ```powershell
+   cd obs-relay
+   npm install
+   npm start
+   ```
+3. Open the relay dashboard at `http://localhost:3000`.
+4. In the Android App, enter your laptop's IP in the Relay Host field.
 
-```powershell
-cd obs-relay
-npm install
-npm start
-```
+### 3. Adding to OBS
+- Create a **Browser Source** in OBS.
+- **URL**: `http://<YOUR_PHONE_IP>:8787/stream.mjpg`
+- **Width/Height**: Match your app's resolution preset (e.g., 1920x1080).
+- For Tally support, use the bridge URL: `http://<YOUR_PHONE_IP>:8787/obs-bridge`
 
-On Windows there is a helper `obs-relay/start-relay.bat` you can use.
+## ⌨️ Shortcuts & Gestures
+| Action | Gesture |
+| :--- | :--- |
+| **Control Selection** | Tap the tile in the bottom strip |
+| **Physical Button Mode** | Tap Focus or Zoom rail |
+| **Exposure Button Mode** | Long-press ISO or Shutter tile |
+| **Velocity Settings** | Swipe from right-most edge |
+| **Release Buttons** | Tap middle of the camera preview |
+| **Switch Camera** | Tap the lens icon (top-right) |
+| **Connection Info** | Tap the gear icon (top-right) |
 
-3. Open the relay admin UI at `http://localhost:3000` and confirm the dashboard loads.
-4. Open the Android app on each phone and register the relay host (use `http://<relay-ip>:3000`).
-5. In OBS, create a Browser Source and use the same source name that you configure for the phone(s).
-
-## Running the relay
-
-- The relay uses these environment variables (defaults shown):
-
-```
-OBS_ADDRESS=ws://localhost:4455
-OBS_PASSWORD=
-SOURCE_NAME=Browser Full
-ADMIN_PORT=3000
-DEVICE_STALE_MS=10000
-DEVICE_LATENCY_HISTORY_LIMIT=12
-```
-
-Adjust values by exporting environment variables before starting the relay.
-
-## Admin UI and diagnostics
-
-- The admin UI uses Server-Sent Events (`/events`) for live updates and includes a Diagnostic Assistant (`/api/assistant`).
-- The device table shows current latency (ms) and a small history sparkline. Aim for <50ms for very low-latency setups, but hardware/network factors dominate.
-
-## Android app (developer notes)
-
-- Project: `android-webcam-bridge`
-- The app runs a small local HTTP server on port `8787` and registers itself with the relay.
-- To build locally (Windows):
-
-```powershell
-cd android-webcam-bridge
-.\gradlew.bat assembleDebug
-```
-
-Notes: you must have a JDK installed and `JAVA_HOME` set for Gradle builds.
-
-If you don't want to build, install the debug APK on a device/emulator and open the app.
-
-### Where the APK is
-
-- Local debug APK: `android-webcam-bridge/app/build/outputs/apk/debug/app-debug.apk`
-- Release APK output, if you build the release variant later: `android-webcam-bridge/app/build/outputs/apk/release/`
-- GitHub Actions now uploads the debug APK as a release asset when you push a tag like `v1.0.0`
-
-### GitHub Releases
-
-To create a GitHub Release with the APK attached:
-
-1. Push a version tag, for example:
-
-```powershell
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-2. GitHub Actions builds `app-debug.apk` and attaches it to the release.
-
-## OBS configuration
-
-- Use obs-websocket v5 on port `4455`.
-- Use a stable Browser Source name (e.g., `Browser Full`) and ensure it matches the phone's configured source name.
-
-## Latency and performance
-
-Latency depends on OBS event propagation, relay processing, network RTT, and phone-side handling. Improvements in this repo include:
-- Relay reuses HTTP keep-alive connections to phones.
-- Phone bridge returns HTTP responses immediately and applies updates asynchronously to reduce request latency.
-
-If latency remains high, profile the phone's bridge and the network path.
-
-## Troubleshooting
-
-- Relay won't connect to OBS: verify obs-websocket v5 and port `4455`.
-- Phones not registering: verify the relay host is reachable from the phone and the phone's saved host includes protocol (e.g., `http://`).
-- Phone appears stale: reopen the Android app or re-register; ensure heartbeats reach the relay.
-
-## Repo layout
-
-- `android-webcam-bridge/` — Android app project
-- `obs-relay/` — Node relay and admin UI
-- `public/` — browser prototype assets
-- `server.mjs` — helper scripts
-
-## Repository hygiene
-
-- The repository ignores build artifacts and IDE settings via `.gitignore` (it includes `.idea/`, `**/build/`, and `obs-relay/devices.json`).
-- You may delete `.idea/` safely; keep `app.iml`/`modules.xml` if you rely on IntelliJ module metadata or back them up.
+## 🏗️ Repository Layout
+- `android-webcam-bridge/` — The Android Studio project (StreamCam Pro).
+- `obs-relay/` — Node.js relay for OBS WebSocket integration.
+- `app/src/main/` — Primary application logic, including the MJPEG server and Camera2 controller.
 
 ---
-
-If you'd like, I can back up `workspace.xml`, `modules.xml`, and `app.iml` before you delete `.idea/`, or I can stage a commit with the README update. Which would you prefer?
+*Developed for high-quality, low-latency mobile broadcasting.*
