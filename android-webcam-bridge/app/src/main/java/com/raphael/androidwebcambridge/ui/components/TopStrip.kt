@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -27,12 +26,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.raphael.androidwebcambridge.bridge.BridgeState
-import com.raphael.androidwebcambridge.bridge.TallyState
 
 @Composable
 fun TopStrip(
     state: BridgeState,
-    onSettingsClick: () -> Unit,
     onLensClick: () -> Unit,
 ) {
     Row(
@@ -52,11 +49,6 @@ fun TopStrip(
                 icon = Icons.Filled.Cameraswitch,
                 onClick = onLensClick,
                 contentDescription = "Switch Camera"
-            )
-            CircleButton(
-                icon = Icons.Filled.Settings,
-                onClick = onSettingsClick,
-                contentDescription = "Settings"
             )
         }
     }
@@ -96,51 +88,38 @@ private fun TopInfoBar(state: BridgeState) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (state.connectedClients > 0 || state.tallyState != TallyState.IDLE) {
-                    val statusColor = when (state.tallyState) {
-                        TallyState.PROGRAM -> Color(0xFFEF4444)
-                        TallyState.PREVIEW -> Color(0xFFF59E0B)
-                        else -> Color(0xFF10B981)
-                    }
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(statusColor)
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = when(state.tallyState) {
-                                TallyState.PROGRAM -> "LIVE"
-                                TallyState.PREVIEW -> "PREVIEW"
-                                else -> "ACTIVE"
-                            },
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 0.5.sp
-                        )
-                    }
-                }
-                
                 InfoBadge(text = state.settings.resolutionPreset.label)
                 InfoBadge(text = "ISO ${state.settings.iso}")
                 InfoBadge(text = "${state.settings.frameRate} FPS")
             }
-            
-            if (state.statusMessage.isNotBlank()) {
-                Text(
-                    text = state.statusMessage.uppercase(),
-                    color = Color(0xFF4ADE80),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 4.dp),
-                    letterSpacing = 1.sp
-                )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                if (state.serverRunning) {
+                    StatusBadge(text = "SERVER STARTED", color = Color(0xFF00FF37))
+                }
+                if (state.tallyState != com.raphael.androidwebcambridge.bridge.TallyState.IDLE || state.connectedClients > 0) {
+                    StatusBadge(text = "TALLY RUNNING", color = Color(0xFF00FF37))
+                }
             }
         }
     }
+}
+
+@Composable
+private fun StatusBadge(text: String, color: Color) {
+    Text(
+        text = text,
+        color = color,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.sp
+    )
 }
 
 @Composable

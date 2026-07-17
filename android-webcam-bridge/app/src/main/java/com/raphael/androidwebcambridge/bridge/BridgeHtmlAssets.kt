@@ -294,6 +294,7 @@ object BridgeHtmlAssets {
                         <input id="relaySourceName" placeholder="phone1" style="flex:1;padding:8px;border-radius:6px;border:1px solid #222;background:transparent;color:var(--text)" />
                         <button id="btn-register-relay-source">Save</button>
                       </div>
+                      <div id="relay-status" style="font-size:11px; color:var(--accent); margin-top:6px"></div>
                     </div>
                   </section>
                 
@@ -420,6 +421,13 @@ object BridgeHtmlAssets {
 
                 document.getElementById('btn-BACK').className = set.lensFacing === 'BACK' ? 'active' : '';
                 document.getElementById('btn-FRONT').className = set.lensFacing === 'FRONT' ? 'active' : '';
+
+                const relayHostInput = document.getElementById('relayHost');
+                const relaySrcInput = document.getElementById('relaySourceName');
+                if (relayHostInput && !relayHostInput.matches(':focus')) relayHostInput.value = state.relayHost || '';
+                if (relaySrcInput && !relaySrcInput.matches(':focus')) relaySrcInput.value = state.relaySourceName || '';
+                const statusEl = document.getElementById('relay-status');
+                if (statusEl) statusEl.textContent = state.relayDiscoveryStatus || '';
               };
 
               document.querySelectorAll('button[data-lens]').forEach(b => {
@@ -533,13 +541,15 @@ object BridgeHtmlAssets {
               document.getElementById('btn-register-relay').onclick = () => {
                 const val = document.getElementById('relayHost').value;
                 if (!val) return alert('Enter relay host');
-                push({ relayHost: val }).then(() => alert('Relay host saved'));
+                document.getElementById('relay-status').textContent = 'Connecting...';
+                push({ relayHost: val }).then(() => document.getElementById('relay-status').textContent = 'Relay host saved');
               };
 
               document.getElementById('btn-register-relay-source').onclick = () => {
                 const val = document.getElementById('relaySourceName').value;
                 if (!val) return alert('Enter source name');
-                push({ relaySourceName: val }).then(() => alert('Source name saved'));
+                document.getElementById('relay-status').textContent = 'Registering...';
+                push({ relaySourceName: val }).then(() => document.getElementById('relay-status').textContent = 'Source name saved');
               };
 
               setInterval(updateUI, 4000);

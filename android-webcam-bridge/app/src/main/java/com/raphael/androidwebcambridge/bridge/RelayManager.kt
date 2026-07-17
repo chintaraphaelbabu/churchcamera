@@ -11,13 +11,28 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
-class RelayManager(private val context: Context, private val scope: CoroutineScope) {
+class RelayManager(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val onDiscoveryStatus: (String) -> Unit = {},
+) {
     private val prefs: SharedPreferences = context.getSharedPreferences("bridge_prefs", Context.MODE_PRIVATE)
     private var relayHeartbeatJob: Job? = null
+    private val discovery = RelayDiscovery { relayUrl ->
+        if (getRelayHost().isNullOrBlank()) {
+            onDiscoveryStatus("Found: $relayUrl")
+            setRelayHost(relayUrl)
+        }
+    }
+
+    fun startDiscovery() = discovery.start()
+    fun stopDiscovery() = discovery.stop()
 
     fun setRelayHost(host: String) {
         val trimmedHost = normalizeRelayHost(host) ?: return
         prefs.edit().putString("relay_host", trimmedHost).apply()
+        discovery.stop()
+        onDiscoveryStatus("Connecting: $trimmedHost")
         scope.launch { registerWithRelay(trimmedHost, getRelaySourceName()) }
         startRelayHeartbeat()
     }
@@ -84,7 +99,9 @@ class RelayManager(private val context: Context, private val scope: CoroutineSco
             "{\"id\":\"$existingId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
         }
 
-        repeat(3) { attempt ->
+        var lastError: String? = null
+        for (attempt in 0 until 3) {
+            var ok = false
             try {
                 withContext(Dispatchers.IO) {
                     val url = URL(host.trimEnd('/') + "/api/register")
@@ -103,14 +120,19 @@ class RelayManager(private val context: Context, private val scope: CoroutineSco
                         saveRelayDeviceId(idMatch?.groupValues?.getOrNull(1) ?: existingId)
                         startRelayHeartbeat()
                         conn.disconnect()
+                        ok = true
                         return@withContext
                     }
+                    lastError = "HTTP $code"
                     conn.disconnect()
                 }
             } catch (e: Exception) {
+                lastError = e.message ?: "Unknown error"
                 if (attempt < 2) delay(1500L)
             }
+            if (ok) break
         }
+        lastError?.let { onDiscoveryStatus("Register failed: $it") }
     }
 
     private suspend fun sendRelayPing() {

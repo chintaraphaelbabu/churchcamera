@@ -58,4 +58,6 @@ dependencies {
     implementation("com.google.mlkit:face-detection:16.1.7")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    implementation("io.getstream:stream-webrtc-android:1.3.10")
 }

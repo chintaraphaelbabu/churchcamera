@@ -58,17 +58,17 @@ fun BottomStrip(
                 modifier = Modifier.weight(1f)
             )
             ControlTile(
+                label = "WB",
+                reading = state.settings.whiteBalanceMode.label.uppercase(),
+                active = isControlActive(OverlayControl.WB),
+                onClick = { onControlClick(OverlayControl.WB) },
+                modifier = Modifier.weight(1f)
+            )
+            ControlTile(
                 label = "RES",
                 reading = state.settings.resolutionPreset.label,
                 active = isControlActive(OverlayControl.RESOLUTION),
                 onClick = { onControlClick(OverlayControl.RESOLUTION) },
-                modifier = Modifier.weight(1f)
-            )
-            ControlTile(
-                label = "FPS",
-                reading = "${state.settings.frameRate}",
-                active = isControlActive(OverlayControl.FRAME_RATE),
-                onClick = { onControlClick(OverlayControl.FRAME_RATE) },
                 modifier = Modifier.weight(1f)
             )
         }
