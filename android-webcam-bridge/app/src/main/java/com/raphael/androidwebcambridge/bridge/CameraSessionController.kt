@@ -6,10 +6,13 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.util.Range
 import android.util.Size
 import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
@@ -27,6 +30,7 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.sqrt
 
 @ExperimentalCamera2Interop
 class CameraSessionController(context: Context) {
@@ -80,14 +84,15 @@ class CameraSessionController(context: Context) {
         provider?.unbindAll()
         preview.setSurfaceProvider(previewView.surfaceProvider)
 
-        val selector = CameraSelector.Builder()
-            .requireLensFacing(
-                when (settings.lensFacing) {
-                    LensFacingOption.BACK -> CameraSelector.LENS_FACING_BACK
-                    LensFacingOption.FRONT -> CameraSelector.LENS_FACING_FRONT
-                },
-            )
-            .build()
+        val selector = if (settings.selectedCameraId != null) {
+            CameraSelector.Builder()
+                .addCameraFilter { cameras ->
+                    cameras.filter { Camera2CameraInfo.from(it).cameraId == settings.selectedCameraId }
+                }
+                .build()
+        } else {
+            CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build()
+        }
 
         camera = provider?.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
         camera2Control = camera?.cameraControl?.let { Camera2CameraControl.from(it) }
@@ -174,6 +179,9 @@ class CameraSessionController(context: Context) {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, settings.exposureCompensation)
         }
 
+        // White Balance
+        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, settings.whiteBalanceMode.camera2Mode)
+
         // Manual Focus
         if (!settings.focusAuto) {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
@@ -252,6 +260,39 @@ class CameraSessionController(context: Context) {
         runCatching { analysisExecutor.shutdownNow() }
     }
 
+    companion object {
+        fun discoverCameras(context: Context): List<LensInfo> {
+            val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val raw = manager.cameraIdList.map { id -> id to manager.getCameraCharacteristics(id) }
+            val front = raw.filter { (_, c) -> c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT }
+            val back = raw.filter { (_, c) -> c.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_FRONT }
+            val sortedBack = back.sortedBy { (_, c) -> c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f }
+
+            fun build(cameraId: String, chars: CameraCharacteristics, label: String): LensInfo {
+                val pixelSize = chars.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                val mp = if (pixelSize != null) (pixelSize.width * pixelSize.height) / 1_000_000 else 0
+                val fl = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
+                val ap = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.firstOrNull()
+                val isLogical = false
+                val physicalIds: Set<String> = setOf()
+                return LensInfo(cameraId, label, chars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK, mp, fl, ap, isLogical, physicalIds)
+            }
+
+            val lenses = mutableListOf<LensInfo>()
+            sortedBack.forEachIndexed { i, (id, chars) ->
+                val label = when {
+                    sortedBack.size == 1 -> "Main"
+                    i == 0 -> "Ultra Wide"
+                    i == sortedBack.size - 1 -> "Telephoto"
+                    else -> "Main"
+                }
+                lenses.add(build(id, chars, label))
+            }
+            front.forEach { (id, chars) -> lenses.add(build(id, chars, "Front")) }
+            return lenses
+        }
+    }
+
     private fun configureInterop(builder: Preview.Builder, settings: BridgeSettings) {
         val extender = Camera2Interop.Extender(builder)
         applyCaptureRequestOptions(extender, settings)
@@ -266,10 +307,6 @@ class CameraSessionController(context: Context) {
         extender: Camera2Interop.Extender<*>,
         settings: BridgeSettings,
     ) {
-        extender.setCaptureRequestOption(
-            CaptureRequest.CONTROL_AWB_MODE,
-            CaptureRequest.CONTROL_AWB_MODE_AUTO,
-        )
         extender.setCaptureRequestOption(
             CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
             Range(settings.frameRate, settings.frameRate),

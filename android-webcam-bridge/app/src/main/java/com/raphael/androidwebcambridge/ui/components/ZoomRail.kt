@@ -1,25 +1,17 @@
 package com.raphael.androidwebcambridge.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
@@ -32,43 +24,79 @@ fun ZoomRail(
     onDecrease: () -> Unit,
     onActiveChange: (Boolean) -> Unit,
 ) {
-    Surface(
+    Box(
         modifier = Modifier
-            .width(132.dp)
+            .width(64.dp)
             .fillMaxHeight()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xCC1A1A2E))
+            .border(
+                1.dp,
+                if (isActive) Color(0xFF4ADE80) else Color(0x33FFFFFF),
+                RoundedCornerShape(16.dp)
+            )
             .clickable { onActiveChange(true) },
-        color = if (isActive) Color(0x990F172A) else Color(0x66000000),
-        shape = RectangleShape,
+        contentAlignment = Alignment.Center
     ) {
+
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
+                .fillMaxHeight()
+                .padding(vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("ZOOM", color = Color.White, style = MaterialTheme.typography.labelMedium)
-            Button(onClick = onIncrease) { Text("+") }
+
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .width(72.dp),
-                contentAlignment = Alignment.Center,
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x66000000))
+                    .clickable { onIncrease() },
+                contentAlignment = Alignment.Center
             ) {
-                Surface(color = Color(0x22000000), shape = RectangleShape) {
-                    Slider(
-                        value = value,
-                        onValueChange = onValueChange,
-                        valueRange = 1f..5f,
-                        modifier = Modifier
-                            .height(340.dp)
-                            .width(260.dp)
-                            .graphicsLayer { rotationZ = 270f },
-                    )
-                }
+                Text(
+                    "+",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
-            Text(String.format(Locale.US, "%.1fx", value), color = Color.White, style = MaterialTheme.typography.labelMedium)
-            Button(onClick = onDecrease) { Text("-") }
+
+            VerticalSlider(
+                value = value,
+                valueRange = 1f..5f,
+                onValueChange = onValueChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                thumbColor =
+                    if (isActive) Color(0xFF4ADE80)
+                    else Color.White,
+                activeTrackColor = Color(0xFF4ADE80),
+                trackColor = Color(0x55FFFFFF)
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x66000000))
+                    .clickable { onDecrease() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "-",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            Text(
+                text = String.format(Locale.US, "%.1fx", value),
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }

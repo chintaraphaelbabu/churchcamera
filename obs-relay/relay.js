@@ -578,4 +578,26 @@ async function connectLoop() {
 // start admin UI
 startAdmin();
 
+// ponytail: UDP broadcast discovery — no deps, works on all Windows WiFi
+const dgram = require('dgram');
+const os = require('os');
+const udpSocket = dgram.createSocket('udp4');
+const BROADCAST_PORT = 9999;
+function getLanIp() {
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const addr of iface) {
+      if (addr.family === 'IPv4' && !addr.internal && !addr.address.startsWith('169.254')) return addr.address;
+    }
+  }
+  return '127.0.0.1';
+}
+const lanIp = getLanIp();
+const discoveryPayload = JSON.stringify({ url: `http://${lanIp}:${ADMIN_PORT}` });
+udpSocket.bind(() => udpSocket.setBroadcast(true));
+setInterval(() => {
+  const buf = Buffer.from(discoveryPayload);
+  udpSocket.send(buf, 0, buf.length, BROADCAST_PORT, '255.255.255.255');
+}, 2000);
+console.log(`UDP broadcast on port ${BROADCAST_PORT}: ${discoveryPayload}`);
+
 connectLoop().catch((e) => console.error(e));

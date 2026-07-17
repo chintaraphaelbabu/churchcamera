@@ -1,11 +1,15 @@
 package com.raphael.androidwebcambridge.bridge
 
+import android.hardware.camera2.CaptureRequest
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class LensFacingOption(val label: String) {
-    BACK("Back camera"),
-    FRONT("Front camera"),
+enum class WhiteBalanceMode(val label: String, val camera2Mode: Int) {
+    AUTO("Auto", CaptureRequest.CONTROL_AWB_MODE_AUTO),
+    INCANDESCENT("Incandescent", CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT),
+    FLUORESCENT("Fluorescent", CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT),
+    DAYLIGHT("Daylight", CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT),
+    CLOUDY("Cloudy", CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT),
 }
 
 enum class AiLensHint(val label: String) {
@@ -28,8 +32,30 @@ enum class ResolutionPreset(val label: String, val width: Int, val height: Int) 
     P4K("4k", 3840, 2160),
 }
 
+data class LensInfo(
+    val cameraId: String,
+    val label: String,
+    val facing: Int,
+    val megapixels: Int,
+    val focalLengthMm: Float,
+    val aperture: Float?,
+    val isLogicalCamera: Boolean,
+    val physicalCameraIds: Set<String> = emptySet(),
+) {
+    fun shortDisplayName(): String = "$label ($megapixels MP)"
+    fun toJson(): JSONObject = JSONObject()
+        .put("cameraId", cameraId)
+        .put("label", label)
+        .put("facing", facing)
+        .put("megapixels", megapixels)
+        .put("focalLengthMm", focalLengthMm)
+        .put("aperture", aperture ?: JSONObject.NULL)
+        .put("isLogicalCamera", isLogicalCamera)
+        .put("physicalCameraIds", JSONArray(physicalCameraIds.toList()))
+}
+
 data class BridgeSettings(
-    val lensFacing: LensFacingOption = LensFacingOption.BACK,
+    val selectedCameraId: String? = null,
     val aiHint: AiLensHint = AiLensHint.BALANCED,
     val physicalZoomRatio: Float = 1f,
     val zoomRatio: Float = 1f,
@@ -40,6 +66,7 @@ data class BridgeSettings(
     val exposureCompensation: Int = 0,
     val iso: Int = 0,
     val shutterSpeedMs: Int = 0,
+    val whiteBalanceMode: WhiteBalanceMode = WhiteBalanceMode.AUTO,
     val focusDistanceDiopters: Float = 0f,
     val focusAuto: Boolean = true,
     val frameRate: Int = 24,
@@ -50,7 +77,7 @@ data class BridgeSettings(
     val zoomVelocity: Float = 0.1f,
 ) {
     fun toJson(): JSONObject = JSONObject()
-        .put("lensFacing", lensFacing.name)
+        .put("selectedCameraId", selectedCameraId ?: JSONObject.NULL)
         .put("aiHint", aiHint.name)
         .put("physicalZoomRatio", physicalZoomRatio)
         .put("zoomRatio", zoomRatio)
@@ -61,6 +88,7 @@ data class BridgeSettings(
         .put("exposureCompensation", exposureCompensation)
         .put("iso", iso)
         .put("shutterSpeedMs", shutterSpeedMs)
+        .put("whiteBalanceMode", whiteBalanceMode.name)
         .put("focusDistanceDiopters", focusDistanceDiopters)
         .put("focusAuto", focusAuto)
         .put("frameRate", frameRate)
@@ -78,7 +106,7 @@ data class BridgeSettings(
             }
 
             return current.copy(
-                lensFacing = read("lensFacing", LensFacingOption::valueOf, current.lensFacing),
+                selectedCameraId = query["selectedCameraId"] ?: current.selectedCameraId,
                 aiHint = read("aiHint", AiLensHint::valueOf, current.aiHint),
                 physicalZoomRatio = read("physicalZoomRatio", String::toFloat, current.physicalZoomRatio),
                 zoomRatio = read("zoomRatio", String::toFloat, current.zoomRatio),
@@ -89,6 +117,7 @@ data class BridgeSettings(
                 exposureCompensation = read("exposureCompensation", String::toInt, current.exposureCompensation),
                 iso = read("iso", String::toInt, current.iso),
                 shutterSpeedMs = read("shutterSpeedMs", String::toInt, current.shutterSpeedMs),
+                whiteBalanceMode = read("whiteBalanceMode", WhiteBalanceMode::valueOf, current.whiteBalanceMode),
                 focusDistanceDiopters = read("focusDistanceDiopters", String::toFloat, current.focusDistanceDiopters),
                 focusAuto = query["focusAuto"]?.let { 
                     it.lowercase() == "true" || it == "1" 
@@ -137,7 +166,12 @@ data class BridgeState(
     val tallyState: TallyState = TallyState.IDLE,
     val cameraRebindToken: Int = 0,
     val localIpAddress: String = "",
+    val relayHost: String = "",
+    val relaySourceName: String = "",
+    val lensDisplayName: String = "",
+    val availableLenses: List<LensInfo> = emptyList(),
     val activeRail: RailType? = null,
+    val relayDiscoveryStatus: String = "",
 ) {
     enum class RailType { FOCUS, ZOOM, ISO, SHUTTER }
     fun toJson(): JSONObject = JSONObject()
@@ -158,13 +192,10 @@ data class BridgeState(
         .put("tallyState", tallyState.name)
         .put("cameraRebindToken", cameraRebindToken)
         .put("localIpAddress", localIpAddress)
-}
-
-fun aiHintToLensFacing(hint: AiLensHint): LensFacingOption {
-    return when (hint) {
-        AiLensHint.FACE -> LensFacingOption.FRONT
-        AiLensHint.LOW_LIGHT, AiLensHint.SHARPNESS, AiLensHint.BALANCED -> LensFacingOption.BACK
-    }
+        .put("availableLenses", JSONArray(availableLenses.map { it.toJson() }))
+        .put("relayHost", relayHost)
+        .put("relaySourceName", relaySourceName)
+        .put("relayDiscoveryStatus", relayDiscoveryStatus)
 }
 
 fun streamPath(): String = "/stream.mjpg"

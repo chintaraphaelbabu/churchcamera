@@ -11,12 +11,14 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -29,17 +31,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.DrawerState
-
 import com.raphael.androidwebcambridge.bridge.BridgeViewModel
 import com.raphael.androidwebcambridge.bridge.BridgeState
 import com.raphael.androidwebcambridge.bridge.TallyState
 import com.raphael.androidwebcambridge.bridge.CameraSessionController
-import com.raphael.androidwebcambridge.bridge.LensFacingOption
 import com.raphael.androidwebcambridge.bridge.ResolutionPreset
 import com.raphael.androidwebcambridge.ui.components.*
 
@@ -83,8 +78,8 @@ fun CameraScreen() {
         )
     }
     var activeControl by remember { mutableStateOf<OverlayControl?>(null) }
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
+    var showLeftDrawer by remember { mutableStateOf(false) }
+    var showRightDrawer by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -119,6 +114,13 @@ fun CameraScreen() {
         return
     }
 
+    LaunchedEffect(hasCameraPermission) {
+        if (hasCameraPermission) {
+            val lenses = CameraSessionController.discoverCameras(context)
+            viewModel.initLenses(lenses)
+        }
+    }
+
     LaunchedEffect(previewView, state.cameraRebindToken) {
         runCatching {
             cameraController.bind(
@@ -144,35 +146,31 @@ fun CameraScreen() {
         onDispose { cameraController.close() }
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier.width(300.dp),
-                drawerContainerColor = Color(0xEEFFFFFF),
-                drawerShape = RectangleShape
-            ) {
-                SettingsTray(
-                    focusVelocity = state.settings.focusVelocity,
-                    zoomVelocity = state.settings.zoomVelocity,
-                    onFocusVelocityChange = viewModel::setFocusVelocity,
-                    onZoomVelocityChange = viewModel::setZoomVelocity
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .then(
+                when (state.tallyState) {
+                    TallyState.PROGRAM -> Modifier.border(8.dp, Color(0xFFEF4444), RectangleShape)
+                    TallyState.PREVIEW -> Modifier.border(6.dp, Color(0xFFF59E0B), RectangleShape)
+                    else -> Modifier.border(2.dp, Color(0xFF10B981).copy(alpha = 0.3f), RectangleShape)
+                }
+            )
+            .pointerInput(Unit) {
+                var triggered = false
+                detectHorizontalDragGestures(
+                    onDragStart = { triggered = false },
+                    onHorizontalDrag = { _, dragAmount ->
+                        if (!triggered) {
+                            if (dragAmount > 0) showLeftDrawer = true
+                            else showRightDrawer = true
+                            triggered = true
+                        }
+                    },
+                    onDragEnd = { },
                 )
             }
-        },
-        gesturesEnabled = true
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .then(
-                    when (state.tallyState) {
-                        TallyState.PROGRAM -> Modifier.border(8.dp, Color(0xFFEF4444), RectangleShape)
-                        TallyState.PREVIEW -> Modifier.border(6.dp, Color(0xFFF59E0B), RectangleShape)
-                        else -> Modifier.border(2.dp, Color(0xFF10B981).copy(alpha = 0.3f), RectangleShape)
-                    }
-                )
-        ) {
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
@@ -188,10 +186,7 @@ fun CameraScreen() {
         ) {
             TopStrip(
                 state = state,
-                onSettingsClick = { activeControl = if (activeControl == OverlayControl.SETTINGS) null else OverlayControl.SETTINGS },
-                onLensClick = {
-                    viewModel.setLens(if (state.settings.lensFacing == LensFacingOption.BACK) LensFacingOption.FRONT else LensFacingOption.BACK)
-                },
+                onLensClick = viewModel::cycleCamera,
             )
 
             Row(
@@ -208,7 +203,6 @@ fun CameraScreen() {
                     onValueChange = viewModel::setFocusDistance,
                     onIncrease = { viewModel.setFocusDistance((state.settings.focusDistanceDiopters + 0.5f).coerceAtMost(10f)) },
                     onDecrease = { viewModel.setFocusDistance((state.settings.focusDistanceDiopters - 0.5f).coerceAtLeast(0f)) },
-                    onFocusCommit = { },
                     onActiveChange = { if (it) viewModel.setActiveRail(BridgeState.RailType.FOCUS) else viewModel.setActiveRail(null) },
                 )
 
@@ -271,6 +265,17 @@ fun CameraScreen() {
                             },
                         )
 
+                        OverlayControl.WB -> SelectionTray(
+                            title = "White Balance",
+                            currentLabel = state.settings.whiteBalanceMode.label,
+                            options = com.raphael.androidwebcambridge.bridge.WhiteBalanceMode.entries,
+                            optionLabel = { it.label },
+                            onSelect = {
+                                viewModel.setWhiteBalance(it)
+                                activeControl = null
+                            },
+                        )
+
                         OverlayControl.RESOLUTION -> SelectionTray(
                             title = "Output Resolution",
                             currentLabel = state.settings.resolutionPreset.label,
@@ -282,28 +287,58 @@ fun CameraScreen() {
                             },
                         )
 
-                        OverlayControl.FRAME_RATE -> SelectionTray(
-                            title = "Target Frame Rate",
-                            currentLabel = "${state.settings.frameRate} FPS",
-                            options = listOf(24, 30, 60),
-                            optionLabel = { "$it FPS" },
-                            onSelect = {
-                                viewModel.setFrameRate(it)
-                                activeControl = null
-                            },
-                        )
-
-                        OverlayControl.SETTINGS -> InfoOverlay(
-                            serverRunning = state.serverRunning,
-                            streamUrl = state.streamUrl,
-                            dashboardUrl = state.dashboardUrl,
-                            localIp = state.localIpAddress,
-                        )
-
                         else -> Unit
                     }
                 }
             }
+        }
+
+        AnimatedVisibility(
+            visible = showLeftDrawer,
+            enter = slideInHorizontally { -it },
+            exit = slideOutHorizontally { -it }
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.4f))
+                    .clickable { showLeftDrawer = false },
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(300.dp)
+                        .fillMaxHeight()
+                        .background(Color(0xEEFFFFFF))
+                ) {
+                    SettingsTray(
+                        focusVelocity = state.settings.focusVelocity,
+                        zoomVelocity = state.settings.zoomVelocity,
+                        onFocusVelocityChange = viewModel::setFocusVelocity,
+                        onZoomVelocityChange = viewModel::setZoomVelocity
+                    )
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = showRightDrawer,
+            enter = slideInHorizontally { it },
+            exit = slideOutHorizontally { it }
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.4f))
+                    .clickable { showRightDrawer = false },
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                ConnectionDetailsDrawer(
+                    state = state,
+                    onRelayHostChange = viewModel::setRelayHost,
+                    onFrameRateChange = viewModel::setFrameRate,
+                    onLensChange = viewModel::setCamera,
+                )
             }
         }
     }

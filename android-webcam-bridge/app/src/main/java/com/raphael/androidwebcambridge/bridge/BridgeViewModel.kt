@@ -2,6 +2,7 @@ package com.raphael.androidwebcambridge.bridge
 
 import android.app.Application
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
@@ -23,7 +24,9 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     private var networkCallbackRegistered = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
-    private val relayManager = RelayManager(application, viewModelScope)
+    private val relayManager = RelayManager(application, viewModelScope) { status ->
+        _state.update { it.copy(relayDiscoveryStatus = status) }
+    }
     private val server = LocalBridgeServer(
         onRemoteUpdate = ::applyRemoteUpdate,
         onConnectionStatusChanged = ::updateClientCount
@@ -33,6 +36,8 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         BridgeState(
             serverRunning = false,
             localIpAddress = findLocalIpv4Address(),
+            relayHost = prefs.getString("relay_host", "") ?: "",
+            relaySourceName = prefs.getString("relay_source_name", "") ?: "",
             statusMessage = "Starting",
             settings = BridgeSettings(
                 focusVelocity = prefs.getFloat("focus_velocity", 0.1f),
@@ -49,10 +54,12 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setRelayHost(host: String) {
         relayManager.setRelayHost(host)
+        _state.update { it.copy(relayHost = host) }
     }
 
     fun setRelaySourceName(sourceName: String) {
         relayManager.setRelaySourceName(sourceName)
+        _state.update { it.copy(relaySourceName = sourceName) }
     }
 
     fun refreshRelayRegistration() {
@@ -131,6 +138,10 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         server.updateState(_state.value)
     }
 
+    fun setLensDisplayName(name: String) {
+        _state.update { it.copy(lensDisplayName = name) }
+    }
+
     fun reportCameraError(message: String) {
         _state.update {
             it.copy(
@@ -147,13 +158,47 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setDashboardZoom(zoomRatio: Float) = updateSettings { it.copy(zoomRatio = zoomRatio) }
 
-    fun setLens(lensFacing: LensFacingOption) = updateSettings(rebind = true) { it.copy(lensFacing = lensFacing, panX = 0f, panY = 0f, zoomRatio = 1.0f) }
+    fun setCamera(cameraId: String) {
+        val lensName = _state.value.availableLenses.find { it.cameraId == cameraId }?.shortDisplayName() ?: ""
+        _state.update {
+            it.copy(
+                lensDisplayName = lensName,
+                settings = it.settings.copy(selectedCameraId = cameraId, panX = 0f, panY = 0f, zoomRatio = 1.0f),
+                cameraRebindToken = it.cameraRebindToken + 1,
+                statusMessage = "Settings updated",
+            )
+        }
+        server.updateState(_state.value)
+    }
+
+    fun cycleCamera() {
+        val current = _state.value
+        val lenses = current.availableLenses
+        if (lenses.isEmpty()) return
+        val idx = lenses.indexOfFirst { it.cameraId == current.settings.selectedCameraId }
+        val next = if (idx < 0 || idx >= lenses.size - 1) 0 else idx + 1
+        setCamera(lenses[next].cameraId)
+    }
+
+    fun initLenses(lenses: List<LensInfo>) {
+        _state.update {
+            val defaultId = lenses.firstOrNull { it.facing != CameraCharacteristics.LENS_FACING_FRONT }?.cameraId
+                ?: lenses.firstOrNull()?.cameraId
+            it.copy(
+                availableLenses = lenses,
+                lensDisplayName = lenses.find { l -> l.cameraId == (it.settings.selectedCameraId ?: defaultId) }?.shortDisplayName() ?: "",
+                settings = it.settings.copy(selectedCameraId = it.settings.selectedCameraId ?: defaultId),
+            )
+        }
+    }
 
     fun setResolution(preset: ResolutionPreset) = updateSettings(rebind = true) { it.copy(resolutionPreset = preset) }
 
     fun setFrameRate(frameRate: Int) = updateSettings(rebind = true) { it.copy(frameRate = frameRate) }
 
     fun setIso(value: Int) = updateSettings { it.copy(iso = value) }
+
+    fun setWhiteBalance(mode: WhiteBalanceMode) = updateSettings { it.copy(whiteBalanceMode = mode) }
 
     fun setActiveRail(rail: BridgeState.RailType?) {
         _state.update { it.copy(activeRail = rail) }
@@ -183,7 +228,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
                 if (tallyStr == null) current.tallyState else TallyState.valueOf(tallyStr)
             } catch (_: Exception) { current.tallyState }
 
-            val needsRebind = nextSettings.lensFacing != current.settings.lensFacing ||
+            val needsRebind = nextSettings.selectedCameraId != current.settings.selectedCameraId ||
                 nextSettings.resolutionPreset != current.settings.resolutionPreset ||
                 nextSettings.frameRate != current.settings.frameRate
 
@@ -256,12 +301,19 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             server.updateState(_state.value)
-            relayManager.registerWithRelay()
+            val existingHost = prefs.getString("relay_host", null)
+            relayManager.startDiscovery()
+            if (existingHost.isNullOrBlank()) {
+                _state.update { it.copy(relayDiscoveryStatus = "Searching for relay...") }
+            } else {
+                relayManager.registerWithRelay()
+            }
         }
     }
 
     override fun onCleared() {
         server.stop()
+        relayManager.stopDiscovery()
         relayManager.pauseRelayHeartbeat()
         try {
             val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
