@@ -30,6 +30,14 @@
   .small{font-size:11px;color:#64748b;margin-top:4px;word-break:break-all}
   .empty{text-align:center;padding:60px 16px;color:#94a3b8;width:100%}
   .empty h2{font-size:18px;margin:0 0 8px;color:#64748b}
+  .ctrl{margin-top:10px;width:100%;font-size:12px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
+  .ctrl summary{cursor:pointer;color:#94a3b8;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+  .ctrl-row{display:flex;align-items:center;gap:6px;margin-top:4px}
+  .ctrl-row label{flex-shrink:0;min-width:36px;color:#94a3b8}
+  .ctrl-row input[type=range]{flex:1;height:4px;accent-color:#4ade80;background:rgba(255,255,255,.1);border-radius:2px;appearance:none;cursor:pointer}
+  .ctrl-row input[type=range]::-webkit-slider-thumb{appearance:none;width:12px;height:12px;border-radius:50%;background:#e5eefb;cursor:pointer}
+  .ctrl-row .val{min-width:28px;text-align:right;color:#e5eefb}
+  .ctrl-row input[type=checkbox]{accent-color:#4ade80;cursor:pointer}
 </style>
 </head>
 <body>
@@ -54,17 +62,86 @@ function render(data){
     const fresh=d.fresh!==false;
     const dotClass=fresh?state:'offline';
     const label=fresh?LABELS[state]||'READY':'NO SIGNAL';
-    return '<div class="card'+(fresh?'':' stale')+'"><div class="dot '+dotClass+'"></div><div class="info"><div class="name">'+(d.sourceName||'?')+'</div><div class="status '+dotClass+'">'+label+'</div><div class="small">'+(d.url||'')+'</div></div></div>'
+    const u=d.url||'';
+    return '<div class="card'+(fresh?'':' stale')+'" data-url="'+u+'"><div class="dot '+dotClass+'"></div><div class="info"><div class="name">'+(d.sourceName||'?')+'</div><div class="status '+dotClass+'">'+label+'</div><div class="small">'+u+'</div></div>'+(u?'<details class="ctrl"><summary>Controls</summary><div class="ctrl-row"><label>ISO</label><input type="range" min="0" max="3200" step="50" value="0" data-param="iso"><span class="val">A</span></div><div class="ctrl-row"><label>WB</label><input type="range" min="0" max="10000" step="100" value="0" data-param="wb"><span class="val">A</span></div><div class="ctrl-row"><label>Shut</label><input type="range" min="0" max="1000" step="1" value="0" data-param="shutter"><span class="val">A</span></div><div class="ctrl-row"><label>AF</label><input type="checkbox" checked data-param="focusAuto"><span style="color:#94a3b8">Auto focus</span></div><div class="ctrl-row"><label>Foc</label><input type="range" min="0" max="20" step="0.1" value="0" data-param="focus"><span class="val">0</span></div></details>':'')+'</div>'
   }).join('');
 }
 
-function fetchData(){fetch('/api/diagnostics').then(r=>r.json()).then(render).catch(()=>{})}
+function fetchData(){fetch('/api/diagnostics').then(r=>r.json()).then(d=>{render(d);initControls()}).catch(()=>{})}
 // ponytail: SSE primary, 10s poll fallback — never stale, no reconnect logic
 const es=new EventSource('/events');
-es.addEventListener('state',e=>{try{render(JSON.parse(e.data))}catch(_){}});
+es.addEventListener('state',e=>{try{const d=JSON.parse(e.data);render(d);initControls()}catch(_){}});
 es.onerror=()=>{};
 setInterval(fetchData,10000);
 fetchData();
+
+// ponytail: per-card camera controls, change event (fires on release) = one POST per gesture
+const CTRL_KEYS={iso:'iso',wb:'whiteBalanceKelvin',shutter:'shutterSpeedMs',focus:'focusDistanceDiopters'};
+const CTRL_PEND=new Map;
+
+function initControls(){
+  document.querySelectorAll('.card[data-url]:not([data-ctrl-ready])').forEach(card=>{
+    const url=card.dataset.url;
+    if(!url)return;
+    card.dataset.ctrlReady='1';
+    CTRL_PEND.set(url,0);
+    card.querySelectorAll('.ctrl-row input[data-param]').forEach(el=>{
+      el.addEventListener('change',()=>updateCard(card,url));
+    });
+    loadCardState(card,url);
+  });
+}
+
+function loadCardState(card,url){
+  fetch(url+'/api/state').then(r=>r.json()).then(s=>{
+    const st=s&&s.settings?s.settings:{};
+    card.querySelectorAll('.ctrl-row input[type=range]').forEach(slider=>{
+      const pk=slider.dataset.param;
+      const k=CTRL_KEYS[pk];
+      if(k!==undefined&&st[k]!==undefined)setSliderVal(slider,st[k]);
+    });
+    const af=card.querySelector('.ctrl-row input[data-param="focusAuto"]');
+    if(af&&st.focusAuto!==undefined)af.checked=st.focusAuto!==false;
+    const focusSlider=card.querySelector('.ctrl-row input[data-param="focus"]');
+    if(focusSlider)focusSlider.disabled=af?af.checked:false;
+  }).catch(()=>{});
+}
+
+function setSliderVal(slider,v){
+  slider.value=v;
+  const span=slider.parentElement.querySelector('.val');
+  if(!span)return;
+  const pk=slider.dataset.param;
+  if(pk==='iso'||pk==='wb'||pk==='shutter')span.textContent=v==0?'A':v;
+  else span.textContent=v;
+}
+
+function updateCard(card,url){
+  const params=[];
+  card.querySelectorAll('.ctrl-row input[type=range]').forEach(slider=>{
+    const pk=slider.dataset.param;
+    const k=CTRL_KEYS[pk];
+    if(!k)return;
+    const v=parseFloat(slider.value);
+    params.push(k+'='+v);
+    const span=slider.parentElement.querySelector('.val');
+    if(span){
+      if(pk==='iso'||pk==='wb'||pk==='shutter')span.textContent=v===0?'A':v;
+      else span.textContent=v;
+    }
+  });
+  const af=card.querySelector('.ctrl-row input[data-param="focusAuto"]');
+  if(af){
+    params.push('focusAuto='+af.checked);
+    const fs=card.querySelector('.ctrl-row input[data-param="focus"]');
+    if(fs)fs.disabled=af.checked;
+  }
+  const tid=CTRL_PEND.get(url);
+  if(tid)clearTimeout(tid);
+  CTRL_PEND.set(url,setTimeout(()=>{
+    fetch(url+'/api/settings?'+params.join('&')).catch(()=>{});
+  },300));
+}
 </script>
 </body>
 </html>
