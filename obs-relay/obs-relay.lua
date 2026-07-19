@@ -1,8 +1,6 @@
 -- ponytail: start relay with OBS, kill on OBS exit. Single-purpose.
 obs = obslua
 
-local RELAY_DIR = "C:\\Users\\Raphael\\Documents\\ChurchCamera\\obs-relay"
-
 function is_relay_running()
   local f = io.popen('netstat -an | find "0.0.0.0:3000" /c')
   local ok = f:read('*a'); f:close()
@@ -11,7 +9,7 @@ end
 
 function script_load(settings)
   if not is_relay_running() then
-    os.execute('start /min "OBS Relay" node "' .. RELAY_DIR .. '\\relay.js"')
+    os.execute('start /min "OBS Relay" node "' .. script_path() .. 'relay.js"')
   end
 end
 

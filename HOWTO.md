@@ -41,10 +41,10 @@ Each phone/source pair is configured in the relay admin page, not in OBS itself.
 
 ## 2. Start the relay
 
-In the relay folder:
+In the relay folder (relative to the repo root):
 
 ```powershell
-cd C:\Users\Raphael\Documents\raphael\projects\app\obs-relay
+cd obs-relay
 npm install
 npm start
 ```
