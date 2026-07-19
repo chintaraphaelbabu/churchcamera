@@ -198,7 +198,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setIso(value: Int) = updateSettings { it.copy(iso = value) }
 
-    fun setWhiteBalance(mode: WhiteBalanceMode) = updateSettings { it.copy(whiteBalanceMode = mode) }
+    fun setWhiteBalanceKelvin(kelvin: Int) = updateSettings { it.copy(whiteBalanceKelvin = kelvin) }
 
     fun setActiveRail(rail: BridgeState.RailType?) {
         _state.update { it.copy(activeRail = rail) }
@@ -304,7 +304,9 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
             val existingHost = prefs.getString("relay_host", null)
             relayManager.startDiscovery()
             if (existingHost.isNullOrBlank()) {
-                _state.update { it.copy(relayDiscoveryStatus = "Searching for relay...") }
+                if (!relayManager.trySsidCache()) {
+                    _state.update { it.copy(relayDiscoveryStatus = "Searching for relay...") }
+                }
             } else {
                 relayManager.registerWithRelay()
             }

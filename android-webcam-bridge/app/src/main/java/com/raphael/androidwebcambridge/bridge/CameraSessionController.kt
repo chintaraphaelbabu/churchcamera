@@ -3,12 +3,14 @@ package com.raphael.androidwebcambridge.bridge
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.RggbChannelVector
 import android.util.Range
 import android.util.Size
 import androidx.camera.camera2.interop.Camera2CameraControl
@@ -30,6 +32,9 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 @ExperimentalCamera2Interop
@@ -52,6 +57,12 @@ class CameraSessionController(context: Context) {
     @Volatile
     private var activeSettings: BridgeSettings = BridgeSettings()
 
+    @Volatile
+    var focusPeakingEnabled: Boolean = false
+
+    @Volatile
+    var focusPeakingBitmap: Bitmap? = null
+
     fun bind(
         previewView: PreviewView,
         lifecycleOwner: LifecycleOwner,
@@ -63,12 +74,11 @@ class CameraSessionController(context: Context) {
         activeSettings = settings
         provider = cameraProviderFuture.get()
         
-        val analysisResolution = Size(2560, 1440) 
         val targetResolution = Size(settings.resolutionPreset.width, settings.resolutionPreset.height)
 
         val previewBuilder = Preview.Builder().setTargetResolution(targetResolution)
         val analysisBuilder = ImageAnalysis.Builder()
-            .setTargetResolution(analysisResolution)
+            .setTargetResolution(targetResolution)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
 
         configureInterop(previewBuilder, settings)
@@ -130,6 +140,11 @@ class CameraSessionController(context: Context) {
                     }
             }
 
+            // ponytail: downsample → 4-direction edge → red overlay, ~2ms per frame
+            if (focusPeakingEnabled) {
+                focusPeakingBitmap = computeFocusPeaking(imageProxy)
+            }
+
             val jpeg = imageProxy.toConstantResolutionJpeg(activeSettings)
             onFrame(jpeg)
         } catch (e: Exception) {
@@ -180,7 +195,14 @@ class CameraSessionController(context: Context) {
         }
 
         // White Balance
-        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, settings.whiteBalanceMode.camera2Mode)
+        // ponytail: Kelvin→RGB gains via Planckian approximation, sensor-specific but good enough
+        if (settings.whiteBalanceKelvin > 0) {
+            builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
+            val g = kelvinToRggbGains(settings.whiteBalanceKelvin)
+            builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(g[0], g[1], g[2], g[3]))
+        } else {
+            builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+        }
 
         // Manual Focus
         if (!settings.focusAuto) {
@@ -197,8 +219,54 @@ class CameraSessionController(context: Context) {
         }
     }
 
+    private fun kelvinToRggbGains(kelvin: Int): FloatArray {
+        val t = kelvin.coerceIn(2500, 10000) / 100f
+        val (rT, gT, bT) = if (t <= 66f) {
+            Triple(255.0, 99.4708025861 * ln(t) - 161.1195681661,
+                if (t <= 19) 0.0 else 138.5177312231 * ln(t - 10) - 305.0447927307)
+        } else {
+            Triple(329.698727446 * (t - 60f).pow(-0.1332047592f),
+                288.1221695283 * (t - 60f).pow(-0.0755148492f), 255.0)
+        }
+        val d65r = 255.0; val d65g = 99.4708025861 * ln(65.0) - 161.1195681661; val d65b = 138.5177312231 * ln(55.0) - 305.0447927307
+        return floatArrayOf(
+            (rT / d65r).toFloat().coerceIn(0.1f, 10f),
+            (gT / d65g).toFloat().coerceIn(0.1f, 10f),
+            (gT / d65g).toFloat().coerceIn(0.1f, 10f),
+            (bT / d65b).toFloat().coerceIn(0.1f, 10f)
+        )
+    }
+
+    private fun computeFocusPeaking(image: ImageProxy): Bitmap? {
+        val plane = image.planes[0]
+        plane.buffer.rewind()
+        val imgW = image.width; val imgH = image.height; val rowStride = plane.rowStride; val pxStride = plane.pixelStride
+        val step = maxOf(1, imgW / 160, imgH / 90)
+        val outW = imgW / step; val outH = imgH / step
+        if (outW < 3 || outH < 3) return null
+        val ys = IntArray(outW * outH)
+        val row = ByteArray(rowStride)
+        for (sy in 0 until outH) {
+            plane.buffer.position(sy * step * rowStride)
+            plane.buffer.get(row, 0, rowStride)
+            for (sx in 0 until outW) ys[sy * outW + sx] = row[sx * step * pxStride].toInt() and 0xFF
+        }
+        val pixels = IntArray(outW * outH)
+        for (y in 1 until outH - 1) {
+            for (x in 1 until outW - 1) {
+                val p5 = ys[y * outW + x]
+                val edge = abs(p5 - ys[y * outW + x - 1]) + abs(p5 - ys[y * outW + x + 1]) +
+                    abs(p5 - ys[(y - 1) * outW + x]) + abs(p5 - ys[(y + 1) * outW + x])
+                if (edge > 80) pixels[y * outW + x] = Color.argb(0x99, 0xFF, 0x00, 0x00)
+            }
+        }
+        val bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(pixels, 0, outW, 0, 0, outW, outH)
+        return bmp
+    }
+
     private fun ImageProxy.toConstantResolutionJpeg(settings: BridgeSettings): ByteArray {
-        val yBuffer = planes[0].buffer
+        val yBuffer = planes[0].buffer.apply { rewind() }
         val vBuffer = planes[2].buffer
         
         val ySize = yBuffer.remaining()

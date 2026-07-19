@@ -225,6 +225,7 @@ async function collectDiagnostics() {
   return {
     connected,
     obsAddress: normalizeObsUrl(OBS_ADDRESS),
+    relayAddress: lanIp,
     deviceStaleMs: DEVICE_STALE_MS,
     programScene: currentProgramScene,
     previewScene: currentPreviewScene,

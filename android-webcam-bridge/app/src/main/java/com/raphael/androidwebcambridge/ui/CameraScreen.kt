@@ -8,17 +8,21 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.material3.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -31,6 +35,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import com.raphael.androidwebcambridge.bridge.BridgeViewModel
 import com.raphael.androidwebcambridge.bridge.BridgeState
 import com.raphael.androidwebcambridge.bridge.TallyState
@@ -80,6 +86,8 @@ fun CameraScreen() {
     var activeControl by remember { mutableStateOf<OverlayControl?>(null) }
     var showLeftDrawer by remember { mutableStateOf(false) }
     var showRightDrawer by remember { mutableStateOf(false) }
+    var focusPeakingEnabled by remember { mutableStateOf(false) }
+    val focusPeakingBitmap = remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -142,6 +150,23 @@ fun CameraScreen() {
         }
     }
 
+    LaunchedEffect(focusPeakingEnabled) {
+        cameraController.focusPeakingEnabled = focusPeakingEnabled
+        if (!focusPeakingEnabled) {
+            cameraController.focusPeakingBitmap = null
+            focusPeakingBitmap.value = null
+        }
+    }
+
+    // ponytail: poll focus peaking bitmap at ~12fps, frame already processed
+    LaunchedEffect(focusPeakingEnabled) {
+        while (isActive && focusPeakingEnabled) {
+            val bmp = cameraController.focusPeakingBitmap
+            focusPeakingBitmap.value = bmp?.takeIf { !it.isRecycled }?.asImageBitmap()
+            delay(83)
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose { cameraController.close() }
     }
@@ -177,6 +202,11 @@ fun CameraScreen() {
                 .clickable { viewModel.setActiveRail(null) },
             factory = { previewView },
         )
+
+        // Focus peaking red edge overlay
+        focusPeakingBitmap.value?.let { img ->
+            Image(bitmap = img, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+        }
 
         Column(
             modifier = Modifier
@@ -265,16 +295,28 @@ fun CameraScreen() {
                             },
                         )
 
-                        OverlayControl.WB -> SelectionTray(
-                            title = "White Balance",
-                            currentLabel = state.settings.whiteBalanceMode.label,
-                            options = com.raphael.androidwebcambridge.bridge.WhiteBalanceMode.entries,
-                            optionLabel = { it.label },
-                            onSelect = {
-                                viewModel.setWhiteBalance(it)
-                                activeControl = null
-                            },
-                        )
+                        OverlayControl.WB -> {
+                            val k = state.settings.whiteBalanceKelvin
+                            Surface(color = Color(0xCCFFFFFF), shape = RectangleShape) {
+                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        Text("White Balance", color = Color.Black, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                        Surface(color = Color(0x88FFFFFF), shape = RectangleShape, modifier = Modifier.height(36.dp).clickable { viewModel.setWhiteBalanceKelvin(0); activeControl = null }) {
+                                            Box(Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                                                Text(if (k == 0) "AUTO" else "RESET", color = Color.Black, style = MaterialTheme.typography.labelMedium)
+                                            }
+                                        }
+                                    }
+                                    Text(if (k == 0) "Auto" else "${k}K", color = Color.Black, style = MaterialTheme.typography.labelLarge)
+                                    Slider(
+                                        value = if (k > 0) k.toFloat() else 5500f,
+                                        onValueChange = { viewModel.setWhiteBalanceKelvin(it.toInt().coerceIn(2500, 10000)) },
+                                        valueRange = 2500f..10000f, steps = 74,
+                                        colors = SliderDefaults.colors(thumbColor = Color.Black, activeTrackColor = Color.Black.copy(alpha = 0.6f), inactiveTrackColor = Color.Black.copy(alpha = 0.2f))
+                                    )
+                                }
+                            }
+                        }
 
                         OverlayControl.RESOLUTION -> SelectionTray(
                             title = "Output Resolution",
@@ -314,8 +356,10 @@ fun CameraScreen() {
                     SettingsTray(
                         focusVelocity = state.settings.focusVelocity,
                         zoomVelocity = state.settings.zoomVelocity,
+                        focusPeakingEnabled = focusPeakingEnabled,
                         onFocusVelocityChange = viewModel::setFocusVelocity,
-                        onZoomVelocityChange = viewModel::setZoomVelocity
+                        onZoomVelocityChange = viewModel::setZoomVelocity,
+                        onFocusPeakingToggle = { focusPeakingEnabled = it },
                     )
                 }
             }

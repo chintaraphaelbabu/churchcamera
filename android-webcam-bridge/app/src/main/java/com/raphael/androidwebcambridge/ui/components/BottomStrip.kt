@@ -59,7 +59,7 @@ fun BottomStrip(
             )
             ControlTile(
                 label = "WB",
-                reading = state.settings.whiteBalanceMode.label.uppercase(),
+                reading = if (state.settings.whiteBalanceKelvin == 0) "AUTO" else "${state.settings.whiteBalanceKelvin}K",
                 active = isControlActive(OverlayControl.WB),
                 onClick = { onControlClick(OverlayControl.WB) },
                 modifier = Modifier.weight(1f)
