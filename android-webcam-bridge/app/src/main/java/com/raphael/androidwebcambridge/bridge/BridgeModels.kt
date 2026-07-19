@@ -1,16 +1,7 @@
 package com.raphael.androidwebcambridge.bridge
 
-import android.hardware.camera2.CaptureRequest
 import org.json.JSONArray
 import org.json.JSONObject
-
-enum class WhiteBalanceMode(val label: String, val camera2Mode: Int) {
-    AUTO("Auto", CaptureRequest.CONTROL_AWB_MODE_AUTO),
-    INCANDESCENT("Incandescent", CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT),
-    FLUORESCENT("Fluorescent", CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT),
-    DAYLIGHT("Daylight", CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT),
-    CLOUDY("Cloudy", CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT),
-}
 
 enum class AiLensHint(val label: String) {
     BALANCED("Balanced"),
@@ -66,7 +57,7 @@ data class BridgeSettings(
     val exposureCompensation: Int = 0,
     val iso: Int = 0,
     val shutterSpeedMs: Int = 0,
-    val whiteBalanceMode: WhiteBalanceMode = WhiteBalanceMode.AUTO,
+    val whiteBalanceKelvin: Int = 0,
     val focusDistanceDiopters: Float = 0f,
     val focusAuto: Boolean = true,
     val frameRate: Int = 24,
@@ -88,7 +79,7 @@ data class BridgeSettings(
         .put("exposureCompensation", exposureCompensation)
         .put("iso", iso)
         .put("shutterSpeedMs", shutterSpeedMs)
-        .put("whiteBalanceMode", whiteBalanceMode.name)
+        .put("whiteBalanceKelvin", whiteBalanceKelvin)
         .put("focusDistanceDiopters", focusDistanceDiopters)
         .put("focusAuto", focusAuto)
         .put("frameRate", frameRate)
@@ -117,7 +108,7 @@ data class BridgeSettings(
                 exposureCompensation = read("exposureCompensation", String::toInt, current.exposureCompensation),
                 iso = read("iso", String::toInt, current.iso),
                 shutterSpeedMs = read("shutterSpeedMs", String::toInt, current.shutterSpeedMs),
-                whiteBalanceMode = read("whiteBalanceMode", WhiteBalanceMode::valueOf, current.whiteBalanceMode),
+                whiteBalanceKelvin = read("whiteBalanceKelvin", String::toInt, current.whiteBalanceKelvin),
                 focusDistanceDiopters = read("focusDistanceDiopters", String::toFloat, current.focusDistanceDiopters),
                 focusAuto = query["focusAuto"]?.let { 
                     it.lowercase() == "true" || it == "1" 

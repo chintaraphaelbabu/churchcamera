@@ -2,6 +2,7 @@ package com.raphael.androidwebcambridge.bridge
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.wifi.WifiManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -71,10 +72,33 @@ class RelayManager(
         }
     }
 
-    private fun getRelayHost(): String? = prefs.getString("relay_host", null)
+    fun getRelayHost(): String? = prefs.getString("relay_host", null)
     private fun getRelaySourceName(): String? = prefs.getString("relay_source_name", null)
     private fun getRelayDeviceId(): String? = prefs.getString("relay_device_id", null)
     private fun saveRelayDeviceId(id: String?) = prefs.edit().putString("relay_device_id", id).apply()
+
+    private fun getCurrentSsid(): String = runCatching {
+        val wifi = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return@runCatching ""
+        wifi.connectionInfo.ssid?.trim('"') ?: ""
+    }.getOrDefault("")
+
+    private fun cacheRelayHost(ssid: String, host: String) {
+        if (ssid.isBlank()) return
+        prefs.edit().putString("relay_host_$ssid", host).apply()
+    }
+
+    private fun getCachedRelayHost(ssid: String): String? {
+        if (ssid.isBlank()) return null
+        return prefs.getString("relay_host_$ssid", null)?.takeIf { it.isNotBlank() }
+    }
+
+    fun trySsidCache(): Boolean {
+        val ssid = getCurrentSsid()
+        if (ssid.isBlank()) return false
+        val cachedHost = getCachedRelayHost(ssid) ?: return false
+        setRelayHost(cachedHost)
+        return true
+    }
 
     private fun normalizeRelayHost(host: String?): String? {
         val trimmed = host?.trim()?.takeIf { it.isNotBlank() } ?: return null
@@ -132,7 +156,17 @@ class RelayManager(
             }
             if (ok) break
         }
-        lastError?.let { onDiscoveryStatus("Register failed: $it") }
+        lastError?.let {
+            if (hostOverride == null) {
+                val ssid = getCurrentSsid()
+                val cachedHost = getCachedRelayHost(ssid)
+                if (cachedHost != null && normalizeRelayHost(cachedHost) != host) {
+                    setRelayHost(cachedHost)
+                    return
+                }
+            }
+            onDiscoveryStatus("Register failed: $it")
+        }
     }
 
     private suspend fun sendRelayPing() {
@@ -162,6 +196,7 @@ class RelayManager(
                 conn.responseCode
                 conn.disconnect()
             }
+            cacheRelayHost(getCurrentSsid(), relayHost)
         } catch (_: Exception) { }
     }
 }

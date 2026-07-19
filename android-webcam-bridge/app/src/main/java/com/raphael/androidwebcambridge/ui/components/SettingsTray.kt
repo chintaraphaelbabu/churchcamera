@@ -14,8 +14,10 @@ import java.util.Locale
 fun SettingsTray(
     focusVelocity: Float,
     zoomVelocity: Float,
+    focusPeakingEnabled: Boolean,
     onFocusVelocityChange: (Float) -> Unit,
     onZoomVelocityChange: (Float) -> Unit,
+    onFocusPeakingToggle: (Boolean) -> Unit,
 ) {
     Surface(color = Color(0xCCFFFFFF), shape = RectangleShape) {
         Column(
@@ -52,6 +54,13 @@ fun SettingsTray(
                     valueRange = 0.01f..0.5f,
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("Focus Peaking", color = Color.Black, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.weight(1f))
+                Switch(checked = focusPeakingEnabled, onCheckedChange = onFocusPeakingToggle,
+                    colors = SwitchDefaults.colors(checkedThumbColor = Color.Red, checkedTrackColor = Color.Red.copy(alpha = 0.4f)))
             }
         }
     }
