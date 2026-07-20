@@ -3,6 +3,7 @@ package com.raphael.androidwebcambridge.bridge
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,6 +78,11 @@ class RelayManager(
     private fun getRelayDeviceId(): String? = prefs.getString("relay_device_id", null)
     private fun saveRelayDeviceId(id: String?) = prefs.edit().putString("relay_device_id", id).apply()
 
+    private fun getBatteryLevel(): Int = runCatching {
+        (context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager)
+            ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+    }.getOrDefault(-1)
+
     private fun getCurrentSsid(): String = runCatching {
         val wifi = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return@runCatching ""
         wifi.connectionInfo.ssid?.trim('"') ?: ""
@@ -116,11 +122,12 @@ class RelayManager(
         val name = android.os.Build.MODEL ?: "Android Phone"
         val sourceName = sourceNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: getRelaySourceName()?.takeIf { it.isNotBlank() } ?: name
         val existingId = getRelayDeviceId()
+        val batteryLevel = getBatteryLevel()
         
         val payload = if (existingId.isNullOrBlank()) {
-            "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
+            "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
         } else {
-            "{\"id\":\"$existingId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
+            "{\"id\":\"$existingId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
         }
 
         var lastError: String? = null
@@ -187,10 +194,11 @@ class RelayManager(
                     connectTimeout = 10000
                     readTimeout = 10000
                 }
+                val batteryLevel = getBatteryLevel()
                 val payload = if (deviceId.isNullOrBlank()) {
-                    "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
+                    "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
                 } else {
-                    "{\"id\":\"$deviceId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\"}"
+                    "{\"id\":\"$deviceId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
                 }
                 conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
                 conn.responseCode

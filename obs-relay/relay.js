@@ -1,20 +1,16 @@
 const { OBSWebSocket } = require('obs-websocket-js');
 const fetch = require('node-fetch');
 const http = require('http');
-const https = require('https');
 
 const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://localhost:4455';
 const OBS_PASSWORD = process.env.OBS_PASSWORD || '';
 const SOURCE_NAME = process.env.SOURCE_NAME || 'Browser Full';
 const POLL_ON_START = process.env.POLL_ON_START !== 'false';
 const DEVICE_STALE_MS = Number(process.env.DEVICE_STALE_MS || 10000);
-const DEVICE_LATENCY_HISTORY_LIMIT = Number(process.env.DEVICE_LATENCY_HISTORY_LIMIT || 12);
 
 const ADMIN_PORT = process.env.ADMIN_PORT || 3000;
-const keepAliveAgents = {
-  http: new http.Agent({ keepAlive: true, maxSockets: 8 }),
-  https: new https.Agent({ keepAlive: true, maxSockets: 8 }),
-};
+// ponytail: http agent only — phone communication is always HTTP
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 8 });
 
 // devices store
 const fs = require('fs');
@@ -54,23 +50,11 @@ function upsertDevice(payload) {
     sourceName: incomingSourceName || previous.sourceName || '',
     url: incomingUrl || previous.url || '',
     lastSeen: now,
+    batteryLevel: payload && payload.batteryLevel !== undefined ? Number(payload.batteryLevel) : (previous.batteryLevel !== undefined ? previous.batteryLevel : -1),
   };
   saveDevices();
   return devices[recordId];
 }
-function pickDeviceUrl(){
-  // pick most recently seen device
-  const list = Object.values(devices).sort((a,b)=> (Number(b.lastSeen)||0) - (Number(a.lastSeen)||0));
-  return list.length? list[0].url : null;
-}
-
-function getTargetUrls() {
-  const urls = Object.values(devices)
-    .map((device) => device && device.url ? String(device.url).trim() : '')
-    .filter(Boolean);
-  return [...new Set(urls)];
-}
-
 function getDeviceSourceName(device) {
   const sourceName = device && device.sourceName ? String(device.sourceName).trim() : '';
   if (sourceName) return sourceName;
@@ -83,38 +67,10 @@ function getDeviceAgeMs(device) {
   return Date.now() - lastSeen;
 }
 
-function getDeviceLatencyMs(device) {
-  const latencyMs = Number(device && device.latencyMs);
-  return Number.isFinite(latencyMs) && latencyMs >= 0 ? Math.round(latencyMs) : null;
-}
-
-function getDeviceLatencyHistory(device) {
-  if (!device || !Array.isArray(device.latencyHistory)) return [];
-  return device.latencyHistory
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value) && value >= 0)
-    .slice(-DEVICE_LATENCY_HISTORY_LIMIT);
-}
-
-function recordDeviceLatency(device, latencyMs, errorMessage) {
+// ponytail: last measured latency only, no history tracking
+function recordDeviceLatency(device, latencyMs) {
   if (!device) return;
-
-  const history = getDeviceLatencyHistory(device);
-  if (Number.isFinite(latencyMs) && latencyMs >= 0) {
-    history.push(Math.round(latencyMs));
-  }
-  while (history.length > DEVICE_LATENCY_HISTORY_LIMIT) {
-    history.shift();
-  }
-
-  device.latencyMs = Number.isFinite(latencyMs) && latencyMs >= 0 ? Math.round(latencyMs) : getDeviceLatencyMs(device);
-  device.latencyHistory = history;
-  device.latencyUpdatedAt = Date.now();
-  if (errorMessage) {
-    device.latencyError = String(errorMessage);
-  } else {
-    delete device.latencyError;
-  }
+  device.latencyMs = Number.isFinite(latencyMs) && latencyMs >= 0 ? Math.round(latencyMs) : null;
   saveDevices();
 }
 
@@ -125,10 +81,8 @@ function serializeDevice(device) {
     sourceName: device.sourceName,
     url: device.url,
     lastSeen: device.lastSeen,
-    latencyMs: getDeviceLatencyMs(device),
-    latencyHistory: getDeviceLatencyHistory(device),
-    latencyUpdatedAt: Number(device && device.latencyUpdatedAt) || null,
-    latencyError: device && device.latencyError ? String(device.latencyError) : null,
+    batteryLevel: device.batteryLevel !== undefined ? device.batteryLevel : -1,
+    latencyMs: device.latencyMs,
   };
 }
 
@@ -139,11 +93,6 @@ function isDeviceFresh(device) {
 
 function summarizeSceneMatch(items, sourceName) {
   return items.some((item) => item.sourceName === sourceName && item.sceneItemEnabled !== false);
-}
-
-function formatTopIssue(diagnostics) {
-  if (!diagnostics.issues || diagnostics.issues.length === 0) return 'No obvious problems detected.';
-  return diagnostics.issues[0];
 }
 
 async function collectDiagnostics() {
@@ -174,10 +123,7 @@ async function collectDiagnostics() {
         sourceName,
         url: device.url,
         lastSeen: device.lastSeen,
-        latencyMs: getDeviceLatencyMs(device),
-        latencyHistory: getDeviceLatencyHistory(device),
-        latencyUpdatedAt: Number(device && device.latencyUpdatedAt) || null,
-        latencyError: device && device.latencyError ? String(device.latencyError) : null,
+        latencyMs: device.latencyMs,
         fresh: isDeviceFresh(device),
         ageMs,
         state: inProgram ? 'PROGRAM' : inPreview ? 'PREVIEW' : 'IDLE',
@@ -236,111 +182,31 @@ async function collectDiagnostics() {
   };
 }
 
-function buildAssistantReply(message, diagnostics) {
-  const query = String(message || '').trim().toLowerCase();
-  const lines = [];
-
-  if (!query) {
-    lines.push('I can check OBS connection, device registration, stale phones, and source mapping.');
-  } else if (query.includes('register') || query.includes('registration') || query.includes('phone')) {
-    lines.push('Phone registration check:');
-  } else if (query.includes('obs') || query.includes('scene') || query.includes('tally') || query.includes('live')) {
-    lines.push('Tally check:');
-  } else {
-    lines.push('Diagnostics summary:');
-  }
-
-  lines.push(`- Status: ${diagnostics.connected ? 'OBS connected' : 'OBS disconnected'}${diagnostics.connected ? `, Program ${diagnostics.programScene || 'unknown'}${diagnostics.previewScene ? `, Preview ${diagnostics.previewScene}` : ''}` : ''}`);
-  lines.push(`- Devices: ${diagnostics.freshDevices}/${diagnostics.totalDevices} fresh`);
-  lines.push(`- Best guess: ${formatTopIssue(diagnostics)}`);
-
-  if (diagnostics.totalDevices > 0) {
-    const activeDevices = diagnostics.devices
-      .slice()
-      .sort((a, b) => {
-        const rank = { PROGRAM: 0, PREVIEW: 1, IDLE: 2 };
-        return (rank[a.state] || 9) - (rank[b.state] || 9);
-      })
-      .slice(0, 4);
-    lines.push('- Current phones:');
-    activeDevices.forEach((device) => {
-      lines.push(`  - ${device.sourceName || device.id}: ${device.fresh ? 'fresh' : 'stale'}, ${device.state}`);
-    });
-  }
-
-  if (diagnostics.issues.length > 0) {
-    lines.push('- Important issues:');
-    diagnostics.issues.slice(0, 4).forEach((issue) => lines.push(`  - ${issue}`));
-  }
-
-  if (query.includes('fix') || query.includes('help') || query.includes('what should i do')) {
-    lines.push('- Suggested next steps:');
-    if (!diagnostics.connected) {
-      lines.push('  1. Confirm OBS is open and obs-websocket is enabled on port 4455.');
-    }
-    if (diagnostics.totalDevices === 0) {
-      lines.push('  2. On a phone, save the relay IP again as http://<relay-ip>:3000.');
-    } else if (diagnostics.devices.some((device) => !device.fresh)) {
-      lines.push('  2. Re-save the relay host on any stale phone so it pings again.');
-    }
-    if (diagnostics.devices.some((device) => !device.inProgram && !device.inPreview)) {
-      lines.push('  3. Make sure the phone source name matches a Browser Source name in OBS exactly.');
-    }
-  }
-
-  lines.push('Ask me about registration, OBS connection, scene mapping, or stale phones if you want a deeper check.');
-  return lines.join('\n');
-}
-
-async function publishAdminState(reason = 'update') {
-  if (adminStatePublishPromise) {
-    adminStatePublishQueued = true;
-    return adminStatePublishPromise;
-  }
-
-  adminStatePublishPromise = (async () => {
+// ponytail: 50ms debounce, no async queue
+let adminStateDebounce = null;
+function publishAdminState() {
+  if (adminStateDebounce) clearTimeout(adminStateDebounce);
+  adminStateDebounce = setTimeout(async () => {
+    adminStateDebounce = null;
     try {
       const diagnostics = await collectDiagnostics();
-      lastAdminState = {
-        ...diagnostics,
-        reason,
-        publishedAt: Date.now(),
-      };
-
+      lastAdminState = {...diagnostics, publishedAt: Date.now()};
       const payload = `event: state\nid: ${lastAdminState.publishedAt}\ndata: ${JSON.stringify(lastAdminState)}\n\n`;
       for (const client of adminClients) {
-        if (client.destroyed) {
-          adminClients.delete(client);
-          continue;
-        }
-        try {
-          client.write(payload);
-        } catch (_error) {
-          adminClients.delete(client);
-        }
+        if (client.destroyed) { adminClients.delete(client); continue; }
+        try { client.write(payload); } catch (_) { adminClients.delete(client); }
       }
     } catch (error) {
       console.warn('publishAdminState error', error.message || error);
     }
-  })().finally(() => {
-    adminStatePublishPromise = null;
-    if (adminStatePublishQueued) {
-      adminStatePublishQueued = false;
-      void publishAdminState('queued');
-    }
-  });
-
-  return adminStatePublishPromise;
+  }, 50);
 }
 
 const obs = new OBSWebSocket();
 let programScene = null;
 let previewScene = null;
 let connected = false;
-let currentTally = null;
 const adminClients = new Set();
-let adminStatePublishPromise = null;
-let adminStatePublishQueued = false;
 let lastAdminState = null;
 
 function normalizeObsUrl(address) {
@@ -352,14 +218,13 @@ async function safePostTallyForDevice(device, state) {
   if (!device || !device.url) return;
   const url = `${String(device.url).replace(/\/$/, '')}/api/tally?tallyState=${state}&_t=${Date.now()}`;
   const startedAt = Date.now();
-  const agent = /^https:/i.test(url) ? keepAliveAgents.https : keepAliveAgents.http;
   try {
-    const res = await fetch(url, { method: 'GET', agent });
-    recordDeviceLatency(device, Date.now() - startedAt, res.ok ? null : `HTTP ${res.status}`);
+    const res = await fetch(url, { method: 'GET', agent: httpAgent });
+    recordDeviceLatency(device, Date.now() - startedAt);
     console.log('posted tally', state, 'to', device.sourceName || device.url, '->', url, 'status', res.status);
   } catch (e) {
-    recordDeviceLatency(device, null, e && e.message ? e.message : 'request failed');
-    console.warn('failed to post tally to phone', e && e.message ? e.message : e);
+    recordDeviceLatency(device, null);
+    console.warn('failed to post tally to phone', e?.message || e);
   }
 }
 
@@ -458,27 +323,22 @@ function installEventHandlers() {
     await evaluateTally();
   });
 
-  obs.on('ConnectionOpened', () => console.log('OBS connection opened'));
   obs.on('ConnectionClosed', (data) => {
     console.log('OBS connection closed', data);
     connected = false;
-    currentTally = null;
     void publishAdminState('disconnected');
   });
-  obs.on('Identified', () => console.log('OBS identified'));
-  obs.on('AuthenticationSuccess', () => console.log('OBS auth success'));
   obs.on('AuthenticationFailure', (err) => console.warn('OBS auth failure', err));
   obs.on('error', (err) => console.warn('OBS error', err));
 }
 
 // --- Admin server (Express)
 const express = require('express');
-const bodyParser = require('body-parser');
 function startAdmin(){
   loadDevices();
   console.log('Loaded devices:', Object.keys(devices).length);
   const app = express();
-  app.use(bodyParser.json());
+  app.use(express.json()); // ponytail: express 4.18 has built-in, drop body-parser
   app.use('/', express.static(path.join(__dirname,'admin')));
   app.get('/events', (req, res) => {
     res.writeHead(200, {
@@ -539,17 +399,7 @@ function startAdmin(){
       const diagnostics = await collectDiagnostics();
       res.json(diagnostics);
     } catch (error) {
-      res.status(500).json({ error: error && error.message ? error.message : 'diagnostics unavailable' });
-    }
-  });
-  app.post('/api/assistant', async (req, res) => {
-    try {
-      const message = req.body && req.body.message ? String(req.body.message) : '';
-      const diagnostics = await collectDiagnostics();
-      const reply = buildAssistantReply(message, diagnostics);
-      res.json({ reply, diagnostics });
-    } catch (error) {
-      res.status(500).json({ error: error && error.message ? error.message : 'assistant unavailable' });
+      res.status(500).json({ error: error?.message || 'diagnostics unavailable' });
     }
   });
   app.listen(ADMIN_PORT, ()=>console.log('Admin UI listening on http://localhost:'+ADMIN_PORT));
@@ -569,7 +419,6 @@ async function connectLoop() {
     connected = false;
     programScene = null;
     previewScene = null;
-    currentTally = null;
     void publishAdminState('retry');
     console.log('Retrying connection in 3s...');
     await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -586,6 +435,7 @@ const udpSocket = dgram.createSocket('udp4');
 const BROADCAST_PORT = 9999;
 function getLanIp() {
   for (const iface of Object.values(os.networkInterfaces())) {
+    if (!iface) continue;
     for (const addr of iface) {
       if (addr.family === 'IPv4' && !addr.internal && !addr.address.startsWith('169.254')) return addr.address;
     }
@@ -594,6 +444,7 @@ function getLanIp() {
 }
 const lanIp = getLanIp();
 const discoveryPayload = JSON.stringify({ url: `http://${lanIp}:${ADMIN_PORT}` });
+udpSocket.on('error', (e) => console.warn('UDP socket error', e.message));
 udpSocket.bind(() => udpSocket.setBroadcast(true));
 setInterval(() => {
   const buf = Buffer.from(discoveryPayload);
