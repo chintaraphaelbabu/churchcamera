@@ -62,14 +62,11 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     // ponytail: AudioRecord/AudioTrack inline, thin class if complexity grows
     private var audioRecorder: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
-    private var audioManager: AudioManager? = null
     private var pttJob: Job? = null
     private val audioLock = Any() // ponytail: protects write vs release race
 
     fun startPTT() {
         if (audioRecorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING) return
-        audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        audioManager!!.isSpeakerphoneOn = false
         val sr = 44100
         val minBuf = AudioRecord.getMinBufferSize(sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBuf <= 0) return
@@ -78,7 +75,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
             AudioRecord(source, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2) // ponytail: UNPROCESSED raw, MIC fallback
         } catch (_: Exception) { null }
         if (audioRecorder?.state != AudioRecord.STATE_INITIALIZED) { audioRecorder?.release(); audioRecorder = null; return }
-        try { audioRecorder?.startRecording() } catch (_: Exception) { audioRecorder?.release(); audioRecorder = null; audioManager?.mode = AudioManager.MODE_NORMAL; audioManager = null; _state.update { it.copy(operatorSpeaking = false) }; return }
+        try { audioRecorder?.startRecording() } catch (_: Exception) { audioRecorder?.release(); audioRecorder = null; _state.update { it.copy(operatorSpeaking = false) }; return }
         runCatching { audioTrack?.pause() } // ponytail: best-effort mute, never break PTT
         _state.update { it.copy(operatorSpeaking = true) }
         pttJob = viewModelScope.launch(Dispatchers.IO) {

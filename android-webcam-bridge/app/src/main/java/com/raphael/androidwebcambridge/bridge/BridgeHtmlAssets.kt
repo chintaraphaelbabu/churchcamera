@@ -600,6 +600,7 @@ object BridgeHtmlAssets {
               let ac = null, nextTime = 0, pttStream = null, pttNode = null;
               const audioEs = new EventSource('/api/audio/out');
               audioEs.onmessage = e => {
+                if (pttNode) return; // ponytail: skip own echo while transmitting
                 (ac || (ac = new AudioContext({sampleRate:44100}))).resume();
                 const raw = atob(e.data), len = raw.length;
                 const view = new Uint8Array(len);
