@@ -151,6 +151,11 @@ class LocalBridgeServer(
                 uri == "/stream.mjpg" || uri.startsWith("/stream") -> writeMjpeg(client, output)
                 else -> writeText(output, "Not found", "text/plain; charset=utf-8", code = 404)
             }
+            // ponytail: graceful shutdown — FIN + delay so peer reads response before close() sends RST
+            if (uri != "/stream.mjpg" && !uri.startsWith("/stream") && uri != "/api/audio/out") {
+                runCatching { client.shutdownOutput() }
+                delay(10)
+            }
         }
     } catch (_: Exception) {}
     }

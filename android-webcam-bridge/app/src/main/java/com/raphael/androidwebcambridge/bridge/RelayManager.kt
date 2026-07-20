@@ -8,18 +8,32 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.TimeUnit
 
 class RelayManager(
     private val context: Context,
     private val scope: CoroutineScope,
     private val onDiscoveryStatus: (String) -> Unit = {},
 ) {
+    var onTallyUpdate: ((TallyState) -> Unit)? = null
+
     private val prefs: SharedPreferences = context.getSharedPreferences("bridge_prefs", Context.MODE_PRIVATE)
     private var relayHeartbeatJob: Job? = null
+    private var tallyWs: WebSocket? = null
+    private var tallyWsReconnectJob: Job? = null
+    @Volatile
+    private var tallyWsReconnectEnabled = true
     private val discovery = RelayDiscovery { relayUrl ->
         if (getRelayHost().isNullOrBlank()) {
             onDiscoveryStatus("Found: $relayUrl")
@@ -32,9 +46,11 @@ class RelayManager(
 
     fun setRelayHost(host: String) {
         val trimmedHost = normalizeRelayHost(host) ?: return
+        val oldHost = getRelayHost()
         prefs.edit().putString("relay_host", trimmedHost).apply()
         discovery.stop()
         onDiscoveryStatus("Connecting: $trimmedHost")
+        if (trimmedHost != oldHost) disconnectTallyWebSocket()
         scope.launch { registerWithRelay(trimmedHost, getRelaySourceName()) }
         startRelayHeartbeat()
     }
@@ -54,6 +70,7 @@ class RelayManager(
     fun pauseRelayHeartbeat() {
         relayHeartbeatJob?.cancel()
         relayHeartbeatJob = null
+        disconnectTallyWebSocket()
     }
 
     fun pingRelayNow() {
@@ -106,6 +123,62 @@ class RelayManager(
         return true
     }
 
+    fun connectTallyWebSocket() {
+        tallyWsReconnectEnabled = true
+        val host = normalizeRelayHost(getRelayHost()) ?: return
+        val deviceId = getRelayDeviceId() ?: return
+        if (tallyWs != null) return
+        val wsUrl = host.replace("http://", "ws://").replace("https://", "wss://").trimEnd('/') + "/tally"
+        val client = OkHttpClient.Builder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .build()
+        val request = Request.Builder().url(wsUrl).build()
+        tallyWs = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                ws.send(JSONObject().put("type", "auth").put("deviceId", deviceId).toString())
+            }
+            override fun onMessage(ws: WebSocket, text: String) {
+                try {
+                    val json = JSONObject(text)
+                    if (json.optString("type") == "tally") {
+                        val tallyStr = json.optString("tallyState")
+                        val tally = runCatching { TallyState.valueOf(tallyStr) }.getOrDefault(TallyState.IDLE)
+                        onTallyUpdate?.invoke(tally)
+                    }
+                } catch (_: Exception) {}
+            }
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                tallyWs = null
+                scheduleWsReconnect()
+            }
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                tallyWs = null
+                scheduleWsReconnect()
+            }
+        })
+    }
+
+    fun disconnectTallyWebSocket() {
+        tallyWsReconnectEnabled = false
+        tallyWsReconnectJob?.cancel()
+        tallyWsReconnectJob = null
+        tallyWs?.close(1000, "shutdown")
+        tallyWs = null
+    }
+
+    private fun scheduleWsReconnect() {
+        if (!tallyWsReconnectEnabled) return
+        if (tallyWsReconnectJob?.isActive == true) return
+        val baseDelay = 1000L
+        tallyWsReconnectJob = scope.launch {
+            var attempt = 0
+            while (isActive && getRelayDeviceId() != null) {
+                delay(baseDelay shl attempt.coerceAtMost(5)) // exponential backoff 1s→32s
+                if (tallyWs == null) connectTallyWebSocket()
+                attempt++
+            }
+        }
+    }
     private fun normalizeRelayHost(host: String?): String? {
         val trimmed = host?.trim()?.takeIf { it.isNotBlank() } ?: return null
         return when {
@@ -150,6 +223,7 @@ class RelayManager(
                         val idMatch = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(responseText)
                         saveRelayDeviceId(idMatch?.groupValues?.getOrNull(1) ?: existingId)
                         startRelayHeartbeat()
+                        connectTallyWebSocket()
                         conn.disconnect()
                         ok = true
                         return@withContext

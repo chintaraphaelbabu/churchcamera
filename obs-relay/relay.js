@@ -1,6 +1,6 @@
 const { OBSWebSocket } = require('obs-websocket-js');
-const fetch = require('node-fetch');
 const http = require('http');
+const WebSocket = require('ws');
 
 const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://localhost:4455';
 const OBS_PASSWORD = process.env.OBS_PASSWORD || '';
@@ -9,8 +9,6 @@ const POLL_ON_START = process.env.POLL_ON_START !== 'false';
 const DEVICE_STALE_MS = Number(process.env.DEVICE_STALE_MS || 10000);
 
 const ADMIN_PORT = process.env.ADMIN_PORT || 3000;
-// ponytail: http agent only — phone communication is always HTTP
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 8 });
 
 // devices store
 const fs = require('fs');
@@ -67,13 +65,6 @@ function getDeviceAgeMs(device) {
   return Date.now() - lastSeen;
 }
 
-// ponytail: last measured latency only, no history tracking
-function recordDeviceLatency(device, latencyMs) {
-  if (!device) return;
-  device.latencyMs = Number.isFinite(latencyMs) && latencyMs >= 0 ? Math.round(latencyMs) : null;
-  saveDevices();
-}
-
 function serializeDevice(device) {
   return {
     id: device.id,
@@ -82,7 +73,6 @@ function serializeDevice(device) {
     url: device.url,
     lastSeen: device.lastSeen,
     batteryLevel: device.batteryLevel !== undefined ? device.batteryLevel : -1,
-    latencyMs: device.latencyMs,
   };
 }
 
@@ -214,17 +204,11 @@ function normalizeObsUrl(address) {
   return `ws://${address}`;
 }
 
-async function safePostTallyForDevice(device, state) {
-  if (!device || !device.url) return;
-  const url = `${String(device.url).replace(/\/$/, '')}/api/tally?tallyState=${state}&_t=${Date.now()}`;
-  const startedAt = Date.now();
-  try {
-    const res = await fetch(url, { method: 'GET', agent: httpAgent });
-    recordDeviceLatency(device, Date.now() - startedAt);
-    console.log('posted tally', state, 'to', device.sourceName || device.url, '->', url, 'status', res.status);
-  } catch (e) {
-    recordDeviceLatency(device, null);
-    console.warn('failed to post tally to phone', e?.message || e);
+// ponytail: tally pushed via WebSocket instead of HTTP — persistent phone→relay connection
+function pushTallyViaWs(device, state) {
+  const ws = phoneSockets.get(device.id);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'tally', tallyState: state, sourceName: device.sourceName }));
   }
 }
 
@@ -269,15 +253,15 @@ async function evaluateTally() {
 
     const programItems = programScene ? await getSceneItems(programScene) : [];
     const previewItems = previewScene ? await getSceneItems(previewScene) : [];
-    const deviceList = Object.values(devices).filter((device) => device && device.url);
+    const deviceList = Object.values(devices).filter((device) => device && device.url && isDeviceFresh(device));
 
-    await Promise.all(deviceList.map(async (device) => {
+    deviceList.forEach((device) => {
       const sourceName = getDeviceSourceName(device);
       const programHas = programItems.some((item) => item.sourceName === sourceName && item.sceneItemEnabled !== false);
       const previewHas = previewItems.some((item) => item.sourceName === sourceName && item.sceneItemEnabled !== false);
       const state = programHas ? 'PROGRAM' : previewHas ? 'PREVIEW' : 'IDLE';
-      await safePostTallyForDevice(device, state);
-    }));
+      pushTallyViaWs(device, state);
+    });
     void publishAdminState('tally');
   } catch (e) {
     console.warn('evaluateTally error', e.message);
@@ -332,13 +316,16 @@ function installEventHandlers() {
   obs.on('error', (err) => console.warn('OBS error', err));
 }
 
-// --- Admin server (Express)
+// ponytail: WebSocket tally push — phone→relay persistent connection, no more failed HTTP tally
+const phoneSockets = new Map(); // deviceId → WebSocket
+
+// --- Admin server (Express) + WebSocket server
 const express = require('express');
 function startAdmin(){
   loadDevices();
   console.log('Loaded devices:', Object.keys(devices).length);
   const app = express();
-  app.use(express.json()); // ponytail: express 4.18 has built-in, drop body-parser
+  app.use(express.json());
   app.use('/', express.static(path.join(__dirname,'admin')));
   app.get('/events', (req, res) => {
     res.writeHead(200, {
@@ -402,7 +389,29 @@ function startAdmin(){
       res.status(500).json({ error: error?.message || 'diagnostics unavailable' });
     }
   });
-  app.listen(ADMIN_PORT, ()=>console.log('Admin UI listening on http://localhost:'+ADMIN_PORT));
+
+  const server = http.createServer(app);
+  const wss = new WebSocket.Server({ server });
+
+  wss.on('connection', (ws) => {
+    let deviceId = null;
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data);
+        if (msg.type === 'auth' && msg.deviceId) {
+          deviceId = msg.deviceId;
+          phoneSockets.set(deviceId, ws);
+          console.log('Tally WebSocket connected:', deviceId);
+        }
+      } catch (_) {}
+    });
+    ws.on('close', () => {
+      if (deviceId) { phoneSockets.delete(deviceId); console.log('Tally WebSocket disconnected:', deviceId); }
+    });
+    ws.on('error', () => {});
+  });
+
+  server.listen(ADMIN_PORT, () => console.log('Admin UI + WebSocket on http://localhost:'+ADMIN_PORT));
   void publishAdminState('startup');
 }
 
