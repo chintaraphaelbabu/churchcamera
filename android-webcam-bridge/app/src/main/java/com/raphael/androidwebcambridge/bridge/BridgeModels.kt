@@ -3,13 +3,6 @@ package com.raphael.androidwebcambridge.bridge
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class AiLensHint(val label: String) {
-    BALANCED("Balanced"),
-    FACE("Face framing"),
-    LOW_LIGHT("Low light"),
-    SHARPNESS("Sharpness"),
-}
-
 enum class TallyState {
     IDLE,
     PREVIEW,
@@ -30,8 +23,6 @@ data class LensInfo(
     val megapixels: Int,
     val focalLengthMm: Float,
     val aperture: Float?,
-    val isLogicalCamera: Boolean,
-    val physicalCameraIds: Set<String> = emptySet(),
 ) {
     fun shortDisplayName(): String = "$label ($megapixels MP)"
     fun toJson(): JSONObject = JSONObject()
@@ -41,13 +32,10 @@ data class LensInfo(
         .put("megapixels", megapixels)
         .put("focalLengthMm", focalLengthMm)
         .put("aperture", aperture ?: JSONObject.NULL)
-        .put("isLogicalCamera", isLogicalCamera)
-        .put("physicalCameraIds", JSONArray(physicalCameraIds.toList()))
 }
 
 data class BridgeSettings(
     val selectedCameraId: String? = null,
-    val aiHint: AiLensHint = AiLensHint.BALANCED,
     val physicalZoomRatio: Float = 1f,
     val zoomRatio: Float = 1f,
     val panX: Float = 0f,
@@ -69,7 +57,6 @@ data class BridgeSettings(
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("selectedCameraId", selectedCameraId ?: JSONObject.NULL)
-        .put("aiHint", aiHint.name)
         .put("physicalZoomRatio", physicalZoomRatio)
         .put("zoomRatio", zoomRatio)
         .put("panX", panX)
@@ -98,7 +85,6 @@ data class BridgeSettings(
 
             return current.copy(
                 selectedCameraId = query["selectedCameraId"] ?: current.selectedCameraId,
-                aiHint = read("aiHint", AiLensHint::valueOf, current.aiHint),
                 physicalZoomRatio = read("physicalZoomRatio", String::toFloat, current.physicalZoomRatio),
                 zoomRatio = read("zoomRatio", String::toFloat, current.zoomRatio),
                 panX = read("panX", String::toFloat, current.panX),
@@ -163,6 +149,7 @@ data class BridgeState(
     val availableLenses: List<LensInfo> = emptyList(),
     val activeRail: RailType? = null,
     val relayDiscoveryStatus: String = "",
+    val batteryLevel: Int = -1,
 ) {
     enum class RailType { FOCUS, ZOOM, ISO, SHUTTER }
     fun toJson(): JSONObject = JSONObject()
@@ -187,8 +174,10 @@ data class BridgeState(
         .put("relayHost", relayHost)
         .put("relaySourceName", relaySourceName)
         .put("relayDiscoveryStatus", relayDiscoveryStatus)
+        .put("batteryLevel", batteryLevel)
 }
 
-fun streamPath(): String = "/stream.mjpg"
+// ponytail: camera-style 1/<value> format
+fun formatShutter(ms: Int): String = if (ms == 0) "AUTO" else "1/$ms"
 
 fun dashboardPath(): String = "/dashboard"

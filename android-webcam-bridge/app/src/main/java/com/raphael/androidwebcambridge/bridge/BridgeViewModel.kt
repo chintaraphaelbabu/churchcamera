@@ -3,6 +3,7 @@ package com.raphael.androidwebcambridge.bridge
 import android.app.Application
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
+import android.os.BatteryManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
@@ -99,10 +100,15 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         val now = System.currentTimeMillis()
         if (now - lastStateUpdateAt > 1000L) {
             lastStateUpdateAt = now
+            val battery = runCatching {
+                (app.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager)
+                    ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+            }.getOrDefault(-1)
             _state.update {
                 it.copy(
                     cameraReady = true,
                     lastFrameAt = now,
+                    batteryLevel = battery,
                 )
             }
             server.updateState(_state.value)
@@ -198,7 +204,11 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setIso(value: Int) = updateSettings { it.copy(iso = value) }
 
-    fun setWhiteBalanceKelvin(kelvin: Int) = updateSettings { it.copy(whiteBalanceKelvin = kelvin) }
+    fun setWhiteBalanceKelvin(kelvin: Int) {
+        val wasAuto = _state.value.settings.whiteBalanceKelvin == 0
+        val nowAuto = kelvin == 0
+        updateSettings(rebind = wasAuto != nowAuto) { it.copy(whiteBalanceKelvin = kelvin) }
+    }
 
     fun setActiveRail(rail: BridgeState.RailType?) {
         _state.update { it.copy(activeRail = rail) }

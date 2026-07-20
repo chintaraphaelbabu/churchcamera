@@ -20,8 +20,10 @@ import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -35,7 +37,6 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
-import kotlin.math.sqrt
 
 @ExperimentalCamera2Interop
 class CameraSessionController(context: Context) {
@@ -81,8 +82,13 @@ class CameraSessionController(context: Context) {
             .setTargetResolution(targetResolution)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
 
-        configureInterop(previewBuilder, settings)
-        configureInterop(analysisBuilder, settings)
+        // ponytail: inline extender setup instead of two overloads
+        Camera2Interop.Extender(previewBuilder).setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(settings.frameRate, settings.frameRate))
+        Camera2Interop.Extender(analysisBuilder).setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(settings.frameRate, settings.frameRate))
+        // ponytail: AWB mode via Extender (highest priority) so CameraX can't override
+        val awbMode = if (settings.whiteBalanceKelvin > 0) CaptureRequest.CONTROL_AWB_MODE_OFF else CaptureRequest.CONTROL_AWB_MODE_AUTO
+        Camera2Interop.Extender(previewBuilder).setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
+        Camera2Interop.Extender(analysisBuilder).setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
 
         val preview = previewBuilder.build()
         val analysis = analysisBuilder.build()
@@ -197,6 +203,8 @@ class CameraSessionController(context: Context) {
         // White Balance
         // ponytail: Kelvin→RGB gains via Planckian approximation, sensor-specific but good enough
         if (settings.whiteBalanceKelvin > 0) {
+            // ponytail: TRANSFORM_MATRIX forces HAL to use our gains instead of its own FAST/HQ mode
+            builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
             val g = kelvinToRggbGains(settings.whiteBalanceKelvin)
             builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(g[0], g[1], g[2], g[3]))
@@ -207,15 +215,19 @@ class CameraSessionController(context: Context) {
         // Manual Focus
         if (!settings.focusAuto) {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-            builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, settings.focusDistanceDiopters)
+            // ponytail: 0f = "don't override, just lock at current position"
+            if (settings.focusDistanceDiopters > 0f) {
+                builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, settings.focusDistanceDiopters)
+            }
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
         } else {
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
         }
 
+        // ponytail: set (not add) forces CameraX to rebuild repeating request on every call
         runCatching {
-            c2Control.addCaptureRequestOptions(builder.build())
+            c2Control.setCaptureRequestOptions(builder.build())
         }
     }
 
@@ -230,10 +242,10 @@ class CameraSessionController(context: Context) {
         }
         val d65r = 255.0; val d65g = 99.4708025861 * ln(65.0) - 161.1195681661; val d65b = 138.5177312231 * ln(55.0) - 305.0447927307
         return floatArrayOf(
-            (rT / d65r).toFloat().coerceIn(0.1f, 10f),
-            (gT / d65g).toFloat().coerceIn(0.1f, 10f),
-            (gT / d65g).toFloat().coerceIn(0.1f, 10f),
-            (bT / d65b).toFloat().coerceIn(0.1f, 10f)
+            (d65r / rT).toFloat().coerceIn(0.1f, 10f),
+            (d65g / gT).toFloat().coerceIn(0.1f, 10f),
+            (d65g / gT).toFloat().coerceIn(0.1f, 10f),
+            (d65b / bT).toFloat().coerceIn(0.1f, 10f)
         )
     }
 
@@ -321,11 +333,28 @@ class CameraSessionController(context: Context) {
         return jpegData
     }
 
+    fun focusAt(x: Float, y: Float, factory: MeteringPointFactory, onComplete: () -> Unit) {
+        try {
+            // ponytail: re-enable AF before metering in case previous tap left it OFF
+            camera2Control?.setCaptureRequestOptions(
+                CaptureRequestOptions.Builder()
+                    .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    .setCaptureRequestOption(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                    .build()
+            )
+            val point = factory.createPoint(x, y)
+            val future = camera?.cameraControl?.startFocusAndMetering(FocusMeteringAction.Builder(point).build())
+            future?.addListener(onComplete, analysisExecutor)
+        } catch (_: Exception) {}
+    }
+
     fun close() {
-        runCatching { provider?.unbindAll() }
-        runCatching { camera?.cameraControl?.cancelFocusAndMetering() }
-        runCatching { camera2Control = null }
-        runCatching { analysisExecutor.shutdownNow() }
+        try {
+            provider?.unbindAll()
+            camera?.cameraControl?.cancelFocusAndMetering()
+        } catch (_: Exception) {}
+        camera2Control = null
+        analysisExecutor.shutdownNow()
     }
 
     companion object {
@@ -341,9 +370,7 @@ class CameraSessionController(context: Context) {
                 val mp = if (pixelSize != null) (pixelSize.width * pixelSize.height) / 1_000_000 else 0
                 val fl = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
                 val ap = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.firstOrNull()
-                val isLogical = false
-                val physicalIds: Set<String> = setOf()
-                return LensInfo(cameraId, label, chars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK, mp, fl, ap, isLogical, physicalIds)
+                return LensInfo(cameraId, label, chars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK, mp, fl, ap)
             }
 
             val lenses = mutableListOf<LensInfo>()
@@ -361,23 +388,4 @@ class CameraSessionController(context: Context) {
         }
     }
 
-    private fun configureInterop(builder: Preview.Builder, settings: BridgeSettings) {
-        val extender = Camera2Interop.Extender(builder)
-        applyCaptureRequestOptions(extender, settings)
-    }
-
-    private fun configureInterop(builder: ImageAnalysis.Builder, settings: BridgeSettings) {
-        val extender = Camera2Interop.Extender(builder)
-        applyCaptureRequestOptions(extender, settings)
-    }
-
-    private fun applyCaptureRequestOptions(
-        extender: Camera2Interop.Extender<*>,
-        settings: BridgeSettings,
-    ) {
-        extender.setCaptureRequestOption(
-            CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-            Range(settings.frameRate, settings.frameRate),
-        )
-    }
 }

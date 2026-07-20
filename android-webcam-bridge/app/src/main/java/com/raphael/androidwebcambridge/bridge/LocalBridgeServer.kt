@@ -18,6 +18,7 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import org.json.JSONObject
 
 class LocalBridgeServer(
     private val port: Int = 8787,
@@ -89,11 +90,11 @@ class LocalBridgeServer(
                 uri == "/api/state" -> writeText(output, currentState.get().toJson().toString(), "application/json; charset=utf-8")
                 uri == "/api/tally" -> {
                   scope.launch { onRemoteUpdate(query) }
-                    writeText(output, JSONObjectFactory.ok("tally updated"), "application/json; charset=utf-8")
+                    writeText(output, JSONObject().put("ok", true).put("message", "tally updated").toString(), "application/json; charset=utf-8")
                 }
                 uri == "/api/settings" -> {
                   scope.launch { onRemoteUpdate(query) }
-                    writeText(output, JSONObjectFactory.ok("settings updated"), "application/json; charset=utf-8")
+                    writeText(output, JSONObject().put("ok", true).put("message", "settings updated").toString(), "application/json; charset=utf-8")
                 }
                 uri == "/stream.mjpg" || uri.startsWith("/stream") -> writeMjpeg(client, output)
                 else -> writeText(output, "Not found", "text/plain; charset=utf-8", code = 404)
@@ -177,10 +178,4 @@ class LocalBridgeServer(
             .toMap()
     }
 
-    private object JSONObjectFactory {
-        fun ok(message: String) = org.json.JSONObject()
-            .put("ok", true)
-            .put("message", message)
-            .toString()
-    }
 }

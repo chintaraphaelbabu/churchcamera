@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.raphael.androidwebcambridge.bridge.BridgeState
+import com.raphael.androidwebcambridge.bridge.formatShutter
 
 @Composable
 fun BottomStrip(
@@ -50,7 +51,7 @@ fun BottomStrip(
             )
             ControlTile(
                 label = "SHUTTER",
-                reading = if (state.settings.shutterSpeedMs == 0) "AUTO" else "${state.settings.shutterSpeedMs}ms",
+                reading = formatShutter(state.settings.shutterSpeedMs),
                 active = isControlActive(OverlayControl.SHUTTER),
                 isRailActive = activeRail == BridgeState.RailType.SHUTTER,
                 onClick = { onControlClick(OverlayControl.SHUTTER) },

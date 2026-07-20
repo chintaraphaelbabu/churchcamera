@@ -142,10 +142,14 @@ object BridgeHtmlAssets {
               input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: rgba(255,255,255,0.1); border-radius: 2px; }
               input[type=range]::-webkit-slider-thumb { height: 16px; width: 16px; border-radius: 50%; background: #fff; cursor: pointer; -webkit-appearance: none; margin-top: -6px; }
               
-              .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
               button { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s; }
               button.active { background: var(--accent); color: #000; border-color: var(--accent); }
               select { width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; font-size: 13px; }
+              .preset-row{display:flex;flex-wrap:wrap;gap:8px}
+              .preset-btn{background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap}
+              .preset-btn:hover{background:rgba(255,255,255,0.1)}
+              .ctx-item{padding:8px 16px;font-size:12px;cursor:pointer;color:var(--text)}
+              .ctx-item:hover{background:rgba(255,255,255,0.05)}
               
               .framing-area { width: 100%; aspect-ratio: 16/9; background: #050505; border-radius: 8px; position: relative; cursor: crosshair; overflow: hidden; border: 1px solid var(--border); }
               .framing-target { position: absolute; border: 1px solid var(--accent); background: rgba(74, 222, 128, 0.05); pointer-events: none; transform: translate(-50%, -50%); transition: all 0.1s; }
@@ -167,14 +171,6 @@ object BridgeHtmlAssets {
           <body>
             <div class="dashboard-layout">
               <aside class="sidebar">
-                <section>
-                  <h2>Camera Selection</h2>
-                  <div class="btn-grid">
-                    <button id="btn-BACK" data-lens="BACK">Rear</button>
-                    <button id="btn-FRONT" data-lens="FRONT">Front</button>
-                  </div>
-                </section>
-
                 <section>
                   <div class="control-header">
                     <h2>Framing</h2>
@@ -202,6 +198,17 @@ object BridgeHtmlAssets {
                   <span class="value" id="focusVal" style="display:block; margin-bottom:8px">Infinity</span>
                   <input id="f-slider" type="range" min="0" max="10" step="0.1" value="0" />
                 </section>
+
+                <section>
+                  <h2>Lens</h2>
+                  <select id="lensSelect"><option value="">Loading...</option></select>
+                </section>
+
+                <section>
+                  <h2>Preset Positions</h2>
+                  <div class="preset-row" id="presetRow"></div>
+                  <button id="savePreset" style="margin-top:8px;width:100%">+ Save Current</button>
+                </section>
               </aside>
 
               <main class="main-view">
@@ -211,6 +218,7 @@ object BridgeHtmlAssets {
                     <div class="status-line">
                       <span id="live" class="live-badge">Live</span>
                       <span id="status">Connecting...</span>
+                      <span id="battery" style="margin-left:auto;font-size:11px;color:var(--sub)">—</span>
                     </div>
                   </div>
                 </header>
@@ -297,7 +305,7 @@ object BridgeHtmlAssets {
                       <div id="relay-status" style="font-size:11px; color:var(--accent); margin-top:6px"></div>
                     </div>
                   </section>
-                
+
                 <div style="margin-top:auto; font-size:11px; color:var(--sub); opacity:0.5">
                   Stream: <code>/stream.mjpg</code>
                 </div>
@@ -309,32 +317,15 @@ object BridgeHtmlAssets {
               const push = async (p) => { await fetch('/api/settings?' + new URLSearchParams(p)); };
               let latestSettings = null;
               
-              let pendingParams = {};
-              let throttleTimer = null;
               let lastLocalInteraction = 0;
-              let lastPushAt = 0;
-              
+              let pendingParams = {};
+              let debounceTimer = null;
+              // ponytail: simple 30ms debounce instead of throttle
               const throttledPush = (params) => {
                 pendingParams = { ...pendingParams, ...params };
                 lastLocalInteraction = Date.now();
-                
-                const now = Date.now();
-                const timeSinceLast = now - lastPushAt;
-                
-                if (throttleTimer) return;
-
-                if (timeSinceLast > 30) {
-                  push(pendingParams);
-                  pendingParams = {};
-                  lastPushAt = now;
-                } else {
-                  throttleTimer = setTimeout(() => {
-                    push(pendingParams);
-                    pendingParams = {};
-                    throttleTimer = null;
-                    lastPushAt = Date.now();
-                  }, 30 - timeSinceLast);
-                }
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => { push(pendingParams); pendingParams = {}; debounceTimer = null; }, 30);
               };
 
               const updateUI = async () => {
@@ -345,6 +336,8 @@ object BridgeHtmlAssets {
                 
                 document.getElementById('status').textContent = state.statusMessage;
                 document.getElementById('live').style.display = state.streaming ? 'inline' : 'none';
+                const batEl=document.getElementById('battery');
+                if(batEl)batEl.textContent=state.batteryLevel>=0?state.batteryLevel+'%':'—';
                 
                 const isInteracting = document.activeElement?.type === 'range' || (now - lastLocalInteraction) < 3000;
 
@@ -412,15 +405,18 @@ object BridgeHtmlAssets {
                   document.getElementById('btn-ISO-A').className = set.iso === 0 ? 'active' : '';
                   
                   document.getElementById('shutter').value = set.shutterSpeedMs || 60;
-                  document.getElementById('shutterVal').textContent = set.shutterSpeedMs > 0 ? set.shutterSpeedMs + 'ms' : 'Auto';
+                  document.getElementById('shutterVal').textContent = set.shutterSpeedMs > 0 ? '1/' + set.shutterSpeedMs : 'Auto';
                   document.getElementById('btn-SH-A').className = set.shutterSpeedMs === 0 ? 'active' : '';
                 }
 
                 document.getElementById('resolution').value = set.resolutionPreset;
                 document.getElementById('fps').value = set.frameRate;
 
-                document.getElementById('btn-BACK').className = set.lensFacing === 'BACK' ? 'active' : '';
-                document.getElementById('btn-FRONT').className = set.lensFacing === 'FRONT' ? 'active' : '';
+                const lns=document.getElementById('lensSelect');
+                if(lns&&state.availableLenses){
+                  lns.innerHTML='<option value="">—</option>'+state.availableLenses.map(l=>'<option value="'+(l.cameraId||'')+'">'+(l.label||l.cameraId||'?')+(l.aperture?' f/'+l.aperture:'')+' · '+(l.megapixels||'')+'MP'+(l.focalLengthMm?' '+l.focalLengthMm.toFixed(1)+'mm':'')+'</option>').join('');
+                  if(set.selectedCameraId)lns.value=set.selectedCameraId;
+                }
 
                 const relayHostInput = document.getElementById('relayHost');
                 const relaySrcInput = document.getElementById('relaySourceName');
@@ -429,16 +425,6 @@ object BridgeHtmlAssets {
                 const statusEl = document.getElementById('relay-status');
                 if (statusEl) statusEl.textContent = state.relayDiscoveryStatus || '';
               };
-
-              document.querySelectorAll('button[data-lens]').forEach(b => {
-                const applyLens = (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  b.classList.add('active');
-                  push({ lensFacing: b.dataset.lens, panX:0, panY:0, zoomRatio:1 }).then(updateUI);
-                };
-                b.onpointerdown = applyLens;
-              });
 
               document.getElementById('btn-AF').onpointerdown = (event) => {
                 event.preventDefault();
@@ -531,12 +517,56 @@ object BridgeHtmlAssets {
               };
 
               shutter.oninput = () => { 
-                shutterVal.textContent = shutter.value + 'ms';
+                shutterVal.textContent = shutter.value > 0 ? '1/' + shutter.value : 'Auto';
                 throttledPush({ shutterSpeedMs: shutter.value });
               };
 
               resolution.onchange = () => push({ resolutionPreset: resolution.value });
               fps.onchange = () => push({ frameRate: fps.value });
+
+              document.getElementById('lensSelect').onchange=()=>{const v=document.getElementById('lensSelect').value;if(v)push({selectedCameraId:v}).then(updateUI)};
+
+              const PRK='cam_presets';
+              const PROW=document.getElementById('presetRow');
+              function loadP(){try{return JSON.parse(localStorage.getItem(PRK))||[]}catch(e){return[]}}
+              function saveP(p){localStorage.setItem(PRK,JSON.stringify(p))}
+              function renderP(){
+                if(!PROW)return;
+                const p=loadP();
+                PROW.innerHTML=p.map((x,i)=>'<div class="preset-btn" data-idx="'+i+'">'+(x.n||'Pos '+(i+1))+'</div>').join('');
+                PROW.querySelectorAll('.preset-btn').forEach(b=>{b.onclick=()=>{
+                  const snap=loadP()[parseInt(b.dataset.idx)];
+                  if(!snap)return;
+                  const q={};['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled'].forEach(k=>{if(snap[k]!==undefined)q[k]=snap[k]});
+                  push(q).then(updateUI);
+                };b.oncontextmenu=(e)=>{
+                  e.preventDefault();
+                  const idx=parseInt(b.dataset.idx);
+                  const all=loadP();
+                  const cur=all[idx];if(!cur)return;
+                  // ponytail: inline context menu, zero deps
+                  document.querySelectorAll('.ctx-menu').forEach(m=>m.remove());
+                  const m=document.createElement('div');
+                  m.className='ctx-menu';m.style.cssText='position:fixed;z-index:999;background:#151a21;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:4px 0;top:'+e.clientY+'px;left:'+e.clientX+'px';
+                  m.innerHTML='<div class="ctx-item" data-act="update">Update to current</div><div class="ctx-item" data-act="delete">Delete</div>';
+                  m.onclick=(ev)=>{
+                    const act=ev.target.dataset.act;
+                    if(act==='delete'){all.splice(idx,1);saveP(all);renderP()}
+                    if(act==='update'){
+                      const snap={},cur=latestSettings||{};
+                      ['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled'].forEach(k=>{if(cur[k]!==undefined)snap[k]=cur[k]});
+                      all[idx]={...cur,...snap};saveP(all);renderP();
+                    }
+                    m.remove();
+                  };
+                  document.body.appendChild(m);
+                  document.addEventListener('click',()=>m.remove(),{once:true});
+                }});              }
+              document.getElementById('savePreset').onclick=()=>{
+                const n=prompt('Preset name:');if(!n)return;
+                const p=loadP(),s={};const cur=latestSettings||{};['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled'].forEach(k=>{if(cur[k]!==undefined)s[k]=cur[k]});
+                p.push({n,...s});saveP(p);renderP();
+              };
 
               document.getElementById('btn-register-relay').onclick = () => {
                 const val = document.getElementById('relayHost').value;
@@ -554,6 +584,7 @@ object BridgeHtmlAssets {
 
               setInterval(updateUI, 4000);
               updateUI();
+              renderP();
             </script>
           </body>
         </html>

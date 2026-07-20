@@ -8,11 +8,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.material3.*
@@ -21,6 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +43,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import com.raphael.androidwebcambridge.bridge.BridgeViewModel
+import com.raphael.androidwebcambridge.bridge.formatShutter
 import com.raphael.androidwebcambridge.bridge.BridgeState
 import com.raphael.androidwebcambridge.bridge.TallyState
 import com.raphael.androidwebcambridge.bridge.CameraSessionController
@@ -88,6 +94,12 @@ fun CameraScreen() {
     var showRightDrawer by remember { mutableStateOf(false) }
     var focusPeakingEnabled by remember { mutableStateOf(false) }
     val focusPeakingBitmap = remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var focusPos by remember { mutableStateOf<Offset?>(null) }
+    var focusLocked by remember { mutableStateOf(false) }
+
+    LaunchedEffect(focusPos) {
+        if (focusPos != null) { delay(1500); focusPos = null }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -199,13 +211,43 @@ fun CameraScreen() {
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
-                .clickable { viewModel.setActiveRail(null) },
+                .pointerInput(previewView) {
+                    detectTapGestures(
+                        onTap = { offset ->
+                            viewModel.setActiveRail(null)
+                            // ponytail: AF first, lock after it settles — avoids lens snapping to infinity
+                            cameraController.focusAt(offset.x, offset.y, previewView.meteringPointFactory) {
+                                viewModel.setFocusAuto(false)
+                            }
+                            focusPos = offset; focusLocked = false
+                        },
+                        onLongPress = { offset ->
+                            viewModel.setActiveRail(null)
+                            viewModel.setFocusAuto(false)
+                            focusPos = offset; focusLocked = true
+                        }
+                    )
+                },
             factory = { previewView },
         )
 
         // Focus peaking red edge overlay
         focusPeakingBitmap.value?.let { img ->
             Image(bitmap = img, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+        }
+
+        // Focus tap/lock indicator
+        focusPos?.let { pos ->
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                if (focusLocked) {
+                    drawRect(Color(0xFF4ADE80), Offset(pos.x - 30f, pos.y - 30f), Size(60f, 60f), style = Stroke(2f))
+                    drawLine(Color(0xFF4ADE80), Offset(pos.x - 4f, pos.y), Offset(pos.x + 4f, pos.y), strokeWidth = 2f)
+                } else {
+                    drawCircle(Color(0xFF4ADE80), 20f, pos, style = Stroke(2f))
+                    drawLine(Color(0xFF4ADE80), Offset(pos.x - 25f, pos.y), Offset(pos.x + 25f, pos.y), strokeWidth = 1.5f)
+                    drawLine(Color(0xFF4ADE80), Offset(pos.x, pos.y - 25f), Offset(pos.x, pos.y + 25f), strokeWidth = 1.5f)
+                }
+            }
         }
 
         Column(
@@ -286,9 +328,9 @@ fun CameraScreen() {
 
                         OverlayControl.SHUTTER -> SelectionTray(
                             title = "Shutter Speed",
-                            currentLabel = if (state.settings.shutterSpeedMs == 0) "Auto" else "${state.settings.shutterSpeedMs} ms",
+                            currentLabel = formatShutter(state.settings.shutterSpeedMs),
                             options = listOf(0, 1, 2, 4, 8, 15, 30, 60, 120),
-                            optionLabel = { if (it == 0) "Auto" else "$it ms" },
+                            optionLabel = { formatShutter(it) },
                             onSelect = {
                                 viewModel.setShutterSpeed(it)
                                 activeControl = null
