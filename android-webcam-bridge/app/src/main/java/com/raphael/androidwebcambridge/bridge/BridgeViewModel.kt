@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.BatteryManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -68,19 +69,20 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     fun startPTT() {
         if (audioRecorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING) return
         audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        audioManager!!.mode = AudioManager.MODE_IN_COMMUNICATION
         audioManager!!.isSpeakerphoneOn = false
-        val sr = 16000
+        val sr = 44100
         val minBuf = AudioRecord.getMinBufferSize(sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBuf <= 0) return
+        val source = if (Build.VERSION.SDK_INT >= 26) MediaRecorder.AudioSource.UNPROCESSED else MediaRecorder.AudioSource.MIC
         audioRecorder = try {
-            AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2)
+            AudioRecord(source, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2) // ponytail: UNPROCESSED raw, MIC fallback
         } catch (_: Exception) { null }
-        if (audioRecorder?.state != AudioRecord.STATE_INITIALIZED) { audioRecorder?.release(); audioRecorder = null; audioManager?.mode = AudioManager.MODE_NORMAL; audioManager = null; return }
+        if (audioRecorder?.state != AudioRecord.STATE_INITIALIZED) { audioRecorder?.release(); audioRecorder = null; return }
         try { audioRecorder?.startRecording() } catch (_: Exception) { audioRecorder?.release(); audioRecorder = null; audioManager?.mode = AudioManager.MODE_NORMAL; audioManager = null; _state.update { it.copy(operatorSpeaking = false) }; return }
+        runCatching { audioTrack?.pause() } // ponytail: best-effort mute, never break PTT
         _state.update { it.copy(operatorSpeaking = true) }
         pttJob = viewModelScope.launch(Dispatchers.IO) {
-            val buf = ByteArray(320)
+            val buf = ByteArray(4096) // ~46ms at 44100Hz 16-bit mono
             while (isActive && audioRecorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val read = audioRecorder?.read(buf, 0, buf.size) ?: 0
                 if (read > 0) server.broadcastPhoneAudio(buf.copyOf(read))
@@ -89,14 +91,15 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun stopPTT() {
+        audioRecorder?.stop() // ponytail: stop first to unblock the IO coroutine's read()
         pttJob?.cancel(); pttJob = null
-        audioRecorder?.stop(); audioRecorder?.release(); audioRecorder = null
-        audioManager?.mode = AudioManager.MODE_NORMAL; audioManager = null
+        audioRecorder?.release(); audioRecorder = null
+        audioTrack?.play()
         _state.update { it.copy(operatorSpeaking = false) }
     }
 
     private fun initAudioPlayback() {
-        val sr = 16000
+        val sr = 44100
         val bufSize = AudioTrack.getMinBufferSize(sr, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         audioTrack = AudioTrack(
             AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).build(),
