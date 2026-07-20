@@ -8,6 +8,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import android.util.Base64
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.BufferedReader
@@ -18,13 +19,18 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ServerSocketFactory
+import javax.net.ssl.SSLContext
 import org.json.JSONObject
 
 class LocalBridgeServer(
     private val port: Int = 8787,
+    sslContext: SSLContext? = null,
     private val onRemoteUpdate: (Map<String, String?>) -> Unit,
     private val onConnectionStatusChanged: (total: Int) -> Unit,
 ) {
+    // ponytail: self-signed cert factory, user clicks through one-time browser warning
+    private val listenerFactory = sslContext?.serverSocketFactory ?: ServerSocketFactory.getDefault()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val latestFrame = AtomicReference(ByteArray(0))
     private val currentState = AtomicReference(BridgeState())
@@ -32,6 +38,30 @@ class LocalBridgeServer(
 
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
+
+    private val audioClients = mutableListOf<BufferedOutputStream>()
+    private var phoneAudioCallback: ((ByteArray) -> Unit)? = null
+
+    fun setPhoneAudioCallback(cb: (ByteArray) -> Unit) { phoneAudioCallback = cb }
+
+    // ponytail: shared audio bus, synchronized broadcast to all SSE clients
+    private fun broadcastAudio(data: ByteArray) {
+        val b64 = Base64.encodeToString(data, Base64.NO_WRAP)
+        synchronized(audioClients) {
+            val itr = audioClients.iterator()
+            while (itr.hasNext()) {
+                try {
+                    itr.next().let { c ->
+                        c.write("data:$b64\n\n".toByteArray())
+                        c.flush()
+                    }
+                } catch (_: Exception) { itr.remove() }
+            }
+        }
+    }
+
+    // phone-recorded audio → browser SSE clients
+    fun broadcastPhoneAudio(data: ByteArray) { broadcastAudio(data) }
 
     fun updateState(state: BridgeState) {
         currentState.set(state)
@@ -45,7 +75,7 @@ class LocalBridgeServer(
         if (serverJob?.isActive == true) return
         serverJob = scope.launch {
             try {
-                serverSocket = ServerSocket(port)
+                serverSocket = listenerFactory.createServerSocket(port) as ServerSocket
                 while (isActive) {
                     val socket = serverSocket?.accept() ?: break
                     launch { handleClient(socket) }
@@ -66,8 +96,9 @@ class LocalBridgeServer(
         scope.cancel()
     }
 
+    // ponytail: swallow SSL handshake failures from plain-HTTP clients hitting the SSL socket
     private suspend fun handleClient(socket: Socket) {
-        socket.use { client ->
+        try { socket.use { client ->
             val reader = BufferedReader(InputStreamReader(BufferedInputStream(client.getInputStream()), StandardCharsets.UTF_8))
             val requestLine = reader.readLine() ?: return
             val requestParts = requestLine.split(Regex("\\s+"))
@@ -96,10 +127,32 @@ class LocalBridgeServer(
                   scope.launch { onRemoteUpdate(query) }
                     writeText(output, JSONObject().put("ok", true).put("message", "settings updated").toString(), "application/json; charset=utf-8")
                 }
+                uri == "/api/audio/in" -> {
+                    query["d"]?.let { raw ->
+                        try {
+                            val data = Base64.decode(raw, Base64.DEFAULT)
+                            broadcastAudio(data)
+                            phoneAudioCallback?.invoke(data)
+                        } catch (_: Exception) {}
+                    }
+                    writeText(output, "{}", "application/json")
+                }
+                uri == "/api/audio/out" -> {
+                    output.write("HTTP/1.1 200 OK\r\n".toByteArray())
+                    output.write("Content-Type: text/event-stream\r\n".toByteArray())
+                    output.write("Cache-Control: no-cache\r\n\r\n".toByteArray())
+                    output.flush()
+                    synchronized(audioClients) { audioClients.add(output) }
+                    try {
+                        while (socket.isConnected && !socket.isClosed && scope.isActive) delay(500)
+                    } catch (_: Exception) {
+                    } finally { synchronized(audioClients) { audioClients.remove(output) } }
+                }
                 uri == "/stream.mjpg" || uri.startsWith("/stream") -> writeMjpeg(client, output)
                 else -> writeText(output, "Not found", "text/plain; charset=utf-8", code = 404)
             }
         }
+    } catch (_: Exception) {}
     }
 
     private suspend fun writeMjpeg(socket: Socket, output: BufferedOutputStream) {

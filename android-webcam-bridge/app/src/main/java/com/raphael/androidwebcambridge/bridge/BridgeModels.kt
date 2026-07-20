@@ -150,6 +150,7 @@ data class BridgeState(
     val activeRail: RailType? = null,
     val relayDiscoveryStatus: String = "",
     val batteryLevel: Int = -1,
+    val operatorSpeaking: Boolean = false,
 ) {
     enum class RailType { FOCUS, ZOOM, ISO, SHUTTER }
     fun toJson(): JSONObject = JSONObject()
@@ -175,6 +176,7 @@ data class BridgeState(
         .put("relaySourceName", relaySourceName)
         .put("relayDiscoveryStatus", relayDiscoveryStatus)
         .put("batteryLevel", batteryLevel)
+        .put("operatorSpeaking", operatorSpeaking)
 }
 
 // ponytail: camera-style 1/<value> format

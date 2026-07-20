@@ -64,6 +64,9 @@ class CameraSessionController(context: Context) {
     @Volatile
     var focusPeakingBitmap: Bitmap? = null
 
+    @Volatile
+    private var activeCamera = true
+
     fun bind(
         previewView: PreviewView,
         lifecycleOwner: LifecycleOwner,
@@ -72,6 +75,7 @@ class CameraSessionController(context: Context) {
         onFacesDetected: (List<DetectedFace>) -> Unit,
         onStatus: (String) -> Unit,
     ) {
+        activeCamera = true
         activeSettings = settings
         provider = cameraProviderFuture.get()
         
@@ -121,19 +125,18 @@ class CameraSessionController(context: Context) {
         onFrame: (ByteArray) -> Unit,
         onFacesDetected: (List<DetectedFace>) -> Unit
     ) {
-        try {
-            val mediaImage = imageProxy.image
-            if (mediaImage != null) {
-                val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                detector.process(inputImage)
-                    .addOnSuccessListener { faces ->
+        val mediaImage = imageProxy.image
+        if (mediaImage != null && activeCamera) {
+            val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            detector.process(inputImage)
+                .addOnSuccessListener { faces ->
+                    if (activeCamera) {
                         val detected = faces.map { face ->
                             val box = face.boundingBox
                             val centerX = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) box.centerX().toFloat() else box.centerY().toFloat()
                             val centerY = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) box.centerY().toFloat() else box.centerX().toFloat()
                             val w = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) imageProxy.width else imageProxy.height
                             val h = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) imageProxy.height else imageProxy.width
-
                             DetectedFace(
                                 id = face.trackingId ?: 0,
                                 x = centerX / w,
@@ -144,16 +147,22 @@ class CameraSessionController(context: Context) {
                         }
                         onFacesDetected(detected)
                     }
-            }
+                }
+                .addOnFailureListener { /* ponytail: face detection failed silently, skip this frame */ }
+                .addOnCompleteListener { finishFrame(imageProxy, onFrame) }
+        } else {
+            finishFrame(imageProxy, onFrame)
+        }
+    }
 
-            // ponytail: downsample → 4-direction edge → red overlay, ~2ms per frame
+    private fun finishFrame(imageProxy: ImageProxy, onFrame: (ByteArray) -> Unit) {
+        try {
             if (focusPeakingEnabled) {
                 focusPeakingBitmap = computeFocusPeaking(imageProxy)
             }
-
             val jpeg = imageProxy.toConstantResolutionJpeg(activeSettings)
             onFrame(jpeg)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         } finally {
             imageProxy.close()
         }
@@ -349,6 +358,7 @@ class CameraSessionController(context: Context) {
     }
 
     fun close() {
+        activeCamera = false
         try {
             provider?.unbindAll()
             camera?.cameraControl?.cancelFocusAndMetering()
