@@ -1,5 +1,6 @@
 const { OBSWebSocket } = require('obs-websocket-js');
 const http = require('http');
+const https = require('https');
 const WebSocket = require('ws');
 
 const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://localhost:4455';
@@ -388,6 +389,23 @@ function startAdmin(){
     } catch (error) {
       res.status(500).json({ error: error?.message || 'diagnostics unavailable' });
     }
+  });
+
+  // ponytail: proxy MJPG from phone over plain HTTP — OBS Browser Source rejects self-signed HTTPS
+  app.get('/api/stream/:id', async (req, res) => {
+    const device = devices[req.params.id];
+    if (!device || !device.url) return res.status(404).end();
+    const streamUrl = device.url.replace('http://', 'https://').replace(/\/+$/, '') + '/stream.mjpg';
+    try {
+      const proxyRes = await new Promise((resolve, reject) => {
+        https.get(streamUrl, { rejectUnauthorized: false }, resolve).on('error', reject);
+      });
+      res.writeHead(200, {
+        'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
+        'Cache-Control': 'no-cache',
+      });
+      proxyRes.pipe(res);
+    } catch { res.status(502).end(); }
   });
 
   const server = http.createServer(app);
