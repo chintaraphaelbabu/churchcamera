@@ -39,7 +39,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     private val relayManager = RelayManager(application, viewModelScope) { status ->
         _state.update { it.copy(relayDiscoveryStatus = status) }
-    }
+    }.also { it.onTallyUpdate = { tally -> handleRelayTally(tally) } }
 
     private val sslContext: SSLContext? by lazy {
         try {
@@ -360,6 +360,11 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
             TallyState.PREVIEW -> "OBS READY"
             TallyState.IDLE -> if (connectedClients > 0) "SOURCE CONNECTED" else "IDLE"
         }
+    }
+
+    // ponytail: WebSocket tally from relay — same logic as HTTP tally in applyRemoteUpdate
+    private fun handleRelayTally(tally: TallyState) {
+        applyRemoteUpdate(mapOf("tallyState" to tally.name))
     }
 
     fun setFocusAuto(auto: Boolean) = updateSettings { it.copy(focusAuto = auto) }

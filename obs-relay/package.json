@@ -9,6 +9,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "node-fetch": "^2.6.7",
-    "obs-websocket-js": "^5.0.0"
+    "obs-websocket-js": "^5.0.0",
+    "ws": "^8.21.1"
   }
 }
