@@ -3,13 +3,23 @@ package com.raphael.androidwebcambridge.bridge
 import android.app.Application
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.os.BatteryManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
 import android.net.NetworkCapabilities
+import java.security.KeyStore
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,6 +28,7 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 class BridgeViewModel(application: Application) : AndroidViewModel(application) {
     private val app: Application = application
@@ -28,10 +39,77 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     private val relayManager = RelayManager(application, viewModelScope) { status ->
         _state.update { it.copy(relayDiscoveryStatus = status) }
     }
+
+    private val sslContext: SSLContext? by lazy {
+        try {
+            val ks = KeyStore.getInstance("PKCS12")
+            val resId = app.resources.getIdentifier("keystore", "raw", app.packageName)
+            if (resId == 0) return@lazy null
+            app.resources.openRawResource(resId).use { stream -> ks.load(stream, "changeit".toCharArray()) }
+            val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+            kmf.init(ks, "changeit".toCharArray())
+            SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
+        } catch (_: Exception) { null }
+    }
+
     private val server = LocalBridgeServer(
+        sslContext = sslContext,
         onRemoteUpdate = ::applyRemoteUpdate,
         onConnectionStatusChanged = ::updateClientCount
     )
+
+    // ponytail: AudioRecord/AudioTrack inline, thin class if complexity grows
+    private var audioRecorder: AudioRecord? = null
+    private var audioTrack: AudioTrack? = null
+    private var audioManager: AudioManager? = null
+    private var pttJob: Job? = null
+    private val audioLock = Any() // ponytail: protects write vs release race
+
+    fun startPTT() {
+        if (audioRecorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING) return
+        audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager!!.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager!!.isSpeakerphoneOn = false
+        val sr = 16000
+        val minBuf = AudioRecord.getMinBufferSize(sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (minBuf <= 0) return
+        audioRecorder = try {
+            AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2)
+        } catch (_: Exception) { null }
+        if (audioRecorder?.state != AudioRecord.STATE_INITIALIZED) { audioRecorder?.release(); audioRecorder = null; audioManager?.mode = AudioManager.MODE_NORMAL; audioManager = null; return }
+        try { audioRecorder?.startRecording() } catch (_: Exception) { audioRecorder?.release(); audioRecorder = null; audioManager?.mode = AudioManager.MODE_NORMAL; audioManager = null; _state.update { it.copy(operatorSpeaking = false) }; return }
+        _state.update { it.copy(operatorSpeaking = true) }
+        pttJob = viewModelScope.launch(Dispatchers.IO) {
+            val buf = ByteArray(320)
+            while (isActive && audioRecorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                val read = audioRecorder?.read(buf, 0, buf.size) ?: 0
+                if (read > 0) server.broadcastPhoneAudio(buf.copyOf(read))
+            }
+        }
+    }
+
+    fun stopPTT() {
+        pttJob?.cancel(); pttJob = null
+        audioRecorder?.stop(); audioRecorder?.release(); audioRecorder = null
+        audioManager?.mode = AudioManager.MODE_NORMAL; audioManager = null
+        _state.update { it.copy(operatorSpeaking = false) }
+    }
+
+    private fun initAudioPlayback() {
+        val sr = 16000
+        val bufSize = AudioTrack.getMinBufferSize(sr, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        audioTrack = AudioTrack(
+            AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).build(),
+            AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sr).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build(),
+            bufSize, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE
+        )
+        audioTrack?.play()
+        server.setPhoneAudioCallback { data ->
+            synchronized(audioLock) {
+                audioTrack?.write(data, 0, data.size)
+            }
+        }
+    }
 
     private val _state = MutableStateFlow(
         BridgeState(
@@ -298,16 +376,18 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun startServer() {
+        initAudioPlayback()
         viewModelScope.launch {
             val ip = findLocalIpv4Address()
             server.start()
+            val proto = if (sslContext != null) "https" else "http"
             _state.update {
                 it.copy(
                     serverRunning = true,
                     statusMessage = "Server started",
                     localIpAddress = ip,
-                    dashboardUrl = "http://$ip:8787/dashboard",
-                    streamUrl = "http://$ip:8787/stream.mjpg",
+                    dashboardUrl = "$proto://$ip:8787/dashboard",
+                    streamUrl = "$proto://$ip:8787/stream.mjpg",
                 )
             }
             server.updateState(_state.value)
@@ -324,6 +404,10 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        stopPTT()
+        synchronized(audioLock) {
+            audioTrack?.stop(); audioTrack?.release(); audioTrack = null
+        }
         server.stop()
         relayManager.stopDiscovery()
         relayManager.pauseRelayHeartbeat()

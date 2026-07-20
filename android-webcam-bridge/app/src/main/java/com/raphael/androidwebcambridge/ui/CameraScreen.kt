@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -93,6 +94,7 @@ fun CameraScreen() {
     var showLeftDrawer by remember { mutableStateOf(false) }
     var showRightDrawer by remember { mutableStateOf(false) }
     var focusPeakingEnabled by remember { mutableStateOf(false) }
+    var showGrid by remember { mutableStateOf(false) }
     val focusPeakingBitmap = remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var focusPos by remember { mutableStateOf<Offset?>(null) }
     var focusLocked by remember { mutableStateOf(false) }
@@ -236,6 +238,17 @@ fun CameraScreen() {
             Image(bitmap = img, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
         }
 
+        // ponytail: rule-of-thirds lines, no deps
+        if (showGrid) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val c = Color.White.copy(alpha = 0.4f)
+                drawLine(c, Offset(size.width / 3f, 0f), Offset(size.width / 3f, size.height), strokeWidth = 1f)
+                drawLine(c, Offset(2f * size.width / 3f, 0f), Offset(2f * size.width / 3f, size.height), strokeWidth = 1f)
+                drawLine(c, Offset(0f, size.height / 3f), Offset(size.width, size.height / 3f), strokeWidth = 1f)
+                drawLine(c, Offset(0f, 2f * size.height / 3f), Offset(size.width, 2f * size.height / 3f), strokeWidth = 1f)
+            }
+        }
+
         // Focus tap/lock indicator
         focusPos?.let { pos ->
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -259,7 +272,14 @@ fun CameraScreen() {
             TopStrip(
                 state = state,
                 onLensClick = viewModel::cycleCamera,
+                onPttPress = viewModel::startPTT,
+                onPttRelease = viewModel::stopPTT,
             )
+
+            if (state.operatorSpeaking) {
+                Text("Operator Speaking", color = Color(0xFFEF4444), fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 4.dp))
+            }
 
             Row(
                 modifier = Modifier
@@ -399,9 +419,11 @@ fun CameraScreen() {
                         focusVelocity = state.settings.focusVelocity,
                         zoomVelocity = state.settings.zoomVelocity,
                         focusPeakingEnabled = focusPeakingEnabled,
+                        showGrid = showGrid,
                         onFocusVelocityChange = viewModel::setFocusVelocity,
                         onZoomVelocityChange = viewModel::setZoomVelocity,
                         onFocusPeakingToggle = { focusPeakingEnabled = it },
+                        onGridToggle = { showGrid = it },
                     )
                 }
             }

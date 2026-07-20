@@ -151,6 +151,12 @@ object BridgeHtmlAssets {
               .ctx-item{padding:8px 16px;font-size:12px;cursor:pointer;color:var(--text)}
               .ctx-item:hover{background:rgba(255,255,255,0.05)}
               
+              .ptt-bar { width: 100%; max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+              .ptt-btn { flex-shrink: 0; width: 120px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: rgba(255,255,255,0.05); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; user-select: none; -webkit-user-select: none; }
+              .ptt-btn:active, .ptt-btn.active { background: #ef4444; border-color: #ef4444; color: #fff; }
+              .ptt-status { font-size: 12px; color: var(--sub); }
+              .ptt-operator { font-size: 12px; color: var(--accent); margin-left: auto; }
+
               .framing-area { width: 100%; aspect-ratio: 16/9; background: #050505; border-radius: 8px; position: relative; cursor: crosshair; overflow: hidden; border: 1px solid var(--border); }
               .framing-target { position: absolute; border: 1px solid var(--accent); background: rgba(74, 222, 128, 0.05); pointer-events: none; transform: translate(-50%, -50%); transition: all 0.1s; }
               .zoom-v-wrap { height: 140px; display: flex; align-items: center; justify-content: center; }
@@ -222,6 +228,12 @@ object BridgeHtmlAssets {
                     </div>
                   </div>
                 </header>
+
+                <div class="ptt-bar">
+                  <button id="pttBtn" class="ptt-btn">Hold to Speak</button>
+                  <span id="pttStatus" class="ptt-status"></span>
+                  <span id="operatorStatus" class="ptt-operator"></span>
+                </div>
 
                 <div class="preview-container" id="previewContainer">
                   <img src="/stream.mjpg" class="preview-img" id="streamImg" alt="Live Preview" />
@@ -336,6 +348,8 @@ object BridgeHtmlAssets {
                 
                 document.getElementById('status').textContent = state.statusMessage;
                 document.getElementById('live').style.display = state.streaming ? 'inline' : 'none';
+                const opEl=document.getElementById('operatorStatus');
+                if(opEl)opEl.textContent=state.operatorSpeaking?'Operator speaking':'Operator: idle';
                 const batEl=document.getElementById('battery');
                 if(batEl)batEl.textContent=state.batteryLevel>=0?state.batteryLevel+'%':'—';
                 
@@ -580,6 +594,49 @@ object BridgeHtmlAssets {
                 if (!val) return alert('Enter source name');
                 document.getElementById('relay-status').textContent = 'Registering...';
                 push({ relaySourceName: val }).then(() => document.getElementById('relay-status').textContent = 'Source name saved');
+              };
+
+              // ponytail: audio intercom, per-chunk AudioBufferSourceNode, glitch-free ring buffer if latency complaints
+              let ac = null, pttStream = null, pttNode = null;
+              const audioEs = new EventSource('/api/audio/out');
+              audioEs.onmessage = e => {
+                (ac || (ac = new AudioContext({sampleRate:16000}))).resume();
+                const raw = atob(e.data), len = raw.length;
+                const buf = new ArrayBuffer(len), view = new Uint8Array(buf);
+                for (let i = 0; i < len; i++) view[i] = raw.charCodeAt(i);
+                const pcm = new Int16Array(buf), flt = new Float32Array(pcm.length);
+                for (let i = 0; i < pcm.length; i++) flt[i] = pcm[i] / 32768;
+                const ab = ac.createBuffer(1, flt.length, 16000);
+                ab.copyToChannel(flt, 0);
+                const src = ac.createBufferSource();
+                src.buffer = ab; src.connect(ac.destination); src.start(ac.currentTime);
+              };
+
+              const pttBtn = document.getElementById('pttBtn');
+              const pttStatus = document.getElementById('pttStatus');
+              pttBtn.onpointerdown = (e) => { e.preventDefault();
+                if (pttNode) return;
+                ac = ac || new AudioContext({sampleRate:16000}); ac.resume();
+                navigator.mediaDevices.getUserMedia({audio:true}).then(s => {
+                  pttStream = s; pttBtn.classList.add('active'); pttBtn.textContent = 'Speaking...'; pttStatus.textContent = 'Release to send';
+                  const src = ac.createMediaStreamSource(s);
+                  pttNode = ac.createScriptProcessor(1024, 1, 1);
+                  pttNode.onaudioprocess = (ev) => {
+                    ev.outputBuffer.getChannelData(0).fill(0); // ponytail: prevent feedback
+                    const input = ev.inputBuffer.getChannelData(0);
+                    const pcm = new Int16Array(input.length);
+                    for (let i = 0; i < input.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
+                    const bytes = new Uint8Array(pcm.buffer);
+                    fetch('/api/audio/in?d=' + encodeURIComponent(btoa(String.fromCharCode(...bytes)))).catch(e => console.error('audio-send', e));
+                  };
+                  src.connect(pttNode); pttNode.connect(ac.destination);
+                }).catch(e => { pttStatus.textContent = 'Mic access denied'; console.error('getUserMedia', e); });
+              };
+              pttBtn.onpointerup = pttBtn.onpointerleave = () => {
+                if (!pttNode) return;
+                pttNode.disconnect(); pttNode = null;
+                pttStream?.getTracks().forEach(t => t.stop()); pttStream = null;
+                pttBtn.classList.remove('active'); pttBtn.textContent = 'Hold to Speak'; pttStatus.textContent = '';
               };
 
               setInterval(updateUI, 4000);

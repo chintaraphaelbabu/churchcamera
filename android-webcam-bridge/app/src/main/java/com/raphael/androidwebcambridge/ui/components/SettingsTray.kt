@@ -15,9 +15,11 @@ fun SettingsTray(
     focusVelocity: Float,
     zoomVelocity: Float,
     focusPeakingEnabled: Boolean,
+    showGrid: Boolean,
     onFocusVelocityChange: (Float) -> Unit,
     onZoomVelocityChange: (Float) -> Unit,
     onFocusPeakingToggle: (Boolean) -> Unit,
+    onGridToggle: (Boolean) -> Unit,
 ) {
     Surface(color = Color(0xCCFFFFFF), shape = RectangleShape) {
         Column(
@@ -61,6 +63,13 @@ fun SettingsTray(
                 Spacer(Modifier.weight(1f))
                 Switch(checked = focusPeakingEnabled, onCheckedChange = onFocusPeakingToggle,
                     colors = SwitchDefaults.colors(checkedThumbColor = Color.Red, checkedTrackColor = Color.Red.copy(alpha = 0.4f)))
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("Grid Overlay", color = Color.Black, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.weight(1f))
+                Switch(checked = showGrid, onCheckedChange = onGridToggle,
+                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color.White.copy(alpha = 0.4f)))
             }
         }
     }
