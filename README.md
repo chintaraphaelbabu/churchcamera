@@ -1,4 +1,4 @@
-# StreamCam Pro
+# ChurchCam
 
 Android phone → professional OBS camera with tally, remote control, and focus peaking.
 
