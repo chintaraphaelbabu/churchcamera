@@ -596,36 +596,40 @@ object BridgeHtmlAssets {
                 push({ relaySourceName: val }).then(() => document.getElementById('relay-status').textContent = 'Source name saved');
               };
 
-              // ponytail: audio intercom, per-chunk AudioBufferSourceNode, glitch-free ring buffer if latency complaints
-              let ac = null, pttStream = null, pttNode = null;
+              // ponytail: sequential AudioBufferSourceNode scheduling, ring buffer if glitches persist
+              let ac = null, nextTime = 0, pttStream = null, pttNode = null;
               const audioEs = new EventSource('/api/audio/out');
               audioEs.onmessage = e => {
-                (ac || (ac = new AudioContext({sampleRate:16000}))).resume();
+                (ac || (ac = new AudioContext({sampleRate:44100}))).resume();
                 const raw = atob(e.data), len = raw.length;
-                const buf = new ArrayBuffer(len), view = new Uint8Array(buf);
+                const view = new Uint8Array(len);
                 for (let i = 0; i < len; i++) view[i] = raw.charCodeAt(i);
-                const pcm = new Int16Array(buf), flt = new Float32Array(pcm.length);
+                const pcm = new Int16Array(view.buffer), flt = new Float32Array(pcm.length);
                 for (let i = 0; i < pcm.length; i++) flt[i] = pcm[i] / 32768;
-                const ab = ac.createBuffer(1, flt.length, 16000);
+                const ab = ac.createBuffer(1, flt.length, 44100);
                 ab.copyToChannel(flt, 0);
                 const src = ac.createBufferSource();
-                src.buffer = ab; src.connect(ac.destination); src.start(ac.currentTime);
+                src.buffer = ab; src.connect(ac.destination);
+                const now = ac.currentTime;
+                if (nextTime < now) nextTime = now;
+                src.start(nextTime);
+                nextTime += ab.duration;
               };
 
               const pttBtn = document.getElementById('pttBtn');
               const pttStatus = document.getElementById('pttStatus');
               pttBtn.onpointerdown = (e) => { e.preventDefault();
                 if (pttNode) return;
-                ac = ac || new AudioContext({sampleRate:16000}); ac.resume();
+                ac = ac || new AudioContext({sampleRate:44100}); ac.resume();
                 navigator.mediaDevices.getUserMedia({audio:true}).then(s => {
                   pttStream = s; pttBtn.classList.add('active'); pttBtn.textContent = 'Speaking...'; pttStatus.textContent = 'Release to send';
                   const src = ac.createMediaStreamSource(s);
-                  pttNode = ac.createScriptProcessor(1024, 1, 1);
+                  pttNode = ac.createScriptProcessor(4096, 1, 1);
                   pttNode.onaudioprocess = (ev) => {
                     ev.outputBuffer.getChannelData(0).fill(0); // ponytail: prevent feedback
                     const input = ev.inputBuffer.getChannelData(0);
                     const pcm = new Int16Array(input.length);
-                    for (let i = 0; i < input.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
+                    for (let i = 0; i < input.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32768 * 1.5)); // ponytail: apply gain
                     const bytes = new Uint8Array(pcm.buffer);
                     fetch('/api/audio/in?d=' + encodeURIComponent(btoa(String.fromCharCode(...bytes)))).catch(e => console.error('audio-send', e));
                   };

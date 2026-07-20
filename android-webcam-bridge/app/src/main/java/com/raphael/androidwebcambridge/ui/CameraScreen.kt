@@ -85,11 +85,8 @@ fun CameraScreen() {
         }
     }
 
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
-        )
-    }
+    var hasCameraPermission by remember { mutableStateOf(false) }
+    var hasAudioPermission by remember { mutableStateOf(false) }
     var activeControl by remember { mutableStateOf<OverlayControl?>(null) }
     var showLeftDrawer by remember { mutableStateOf(false) }
     var showRightDrawer by remember { mutableStateOf(false) }
@@ -104,15 +101,18 @@ fun CameraScreen() {
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        hasCameraPermission = granted
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+    ) { perms ->
+        hasCameraPermission = perms[Manifest.permission.CAMERA] == true
+        hasAudioPermission = perms[Manifest.permission.RECORD_AUDIO] == true
     }
 
     LaunchedEffect(Unit) {
-        if (!hasCameraPermission) {
-            permissionLauncher.launch(Manifest.permission.CAMERA)
-        }
+        val perms = mutableSetOf<String>()
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) perms.add(Manifest.permission.CAMERA)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) perms.add(Manifest.permission.RECORD_AUDIO)
+        if (perms.isNotEmpty()) permissionLauncher.launch(perms.toTypedArray())
+        else { hasCameraPermission = true; hasAudioPermission = true }
     }
 
     DisposableEffect(lifecycleOwner, viewModel) {
@@ -132,7 +132,7 @@ fun CameraScreen() {
     }
 
     if (!hasCameraPermission) {
-        PermissionGate(onGrant = { permissionLauncher.launch(Manifest.permission.CAMERA) })
+        PermissionGate(onGrant = { permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)) })
         return
     }
 
