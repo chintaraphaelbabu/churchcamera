@@ -24,7 +24,13 @@ This project turns your Android phone into a high-end, remote-controlled webcam 
 - **Manual Exposure**: Dedicated ISO and Shutter Speed (ms) controls with real-time "Auto" toggles.
 - **Exposure Compensation**: Fine-tune brightness (+/- 6 EV) when in Auto mode.
 
-### 5. High-Performance Streaming
+### 5. Audio Intercom
+- **Push-to-Talk (Phone)**: Hold the mic button on the phone to transmit audio to the browser dashboard.
+- **Push-to-Talk (Browser)**: Hold the mic button on the dashboard to transmit audio from your laptop mic to the phone speaker.
+- **Half-Duplex**: Playback is automatically muted while transmitting to prevent echo.
+- **Sample Rate**: 44100 Hz PCM 16-bit mono for clear voice quality.
+
+### 6. High-Performance Streaming
 - **MJPEG Output**: Optimized specifically for OBS "Browser Source" with minimal latency.
 - **Bulk Memory Processing**: High-speed pixel processing for buttery smooth 30-60 FPS performance.
 
@@ -32,14 +38,21 @@ This project turns your Android phone into a high-end, remote-controlled webcam 
 
 - **ViewModel**: State machine that coordinates camera hardware, AI detection, and network commands.
 - **Camera Controller**: High-speed video pipeline that performs software cropping and AI face detection.
-- **Local Server**: Lightweight HTTP server that delivers the dashboard and handles the MJPEG stream.
+- **Local Server**: Lightweight HTTP server that delivers the dashboard, handles MJPEG stream, and routes audio via SSE and HTTP endpoints.
+
+## Permissions
+
+The app requires the following runtime permissions:
+- **Camera**: Required for video streaming.
+- **Record Audio**: Required for Push-to-Talk intercom.
 
 ## How to use
 
-1.  Open the app on your Android phone and grant camera permissions.
+1.  Open the app on your Android phone and grant camera and microphone permissions.
 2.  Open the **Settings** panel to find your local IP address.
 3.  On your laptop, go to `http://<phone-ip>:8787/dashboard`.
 4.  In OBS, add a **Browser Source** pointing to `http://<phone-ip>:8787/stream.mjpg`.
+5.  Use the **Hold to Speak** buttons on both the phone and dashboard for two-way audio intercom.
 
 ## Device Support
 - **Resolution**: Supports up to 4K internal capture for high-quality oversampling.
