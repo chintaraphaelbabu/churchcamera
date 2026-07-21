@@ -20,7 +20,7 @@ function loadDevices(){
   try{
     const txt = fs.readFileSync(DEVICES_FILE,'utf8');
     devices = JSON.parse(txt||'{}');
-  }catch(e){devices={}}
+  }catch(_){devices={}}
 }
 function saveDevices(){
   try{fs.writeFileSync(DEVICES_FILE, JSON.stringify(devices,null,2));}catch(e){console.warn('failed to save devices',e.message)}
@@ -217,8 +217,8 @@ async function getSceneItems(sceneName) {
   try {
     const resp = await obs.call('GetSceneItemList', { sceneName });
     return resp.sceneItems || [];
-  } catch (e) {
-    console.warn('GetSceneItemList failed for', sceneName, e.message);
+  } catch (err) {
+    console.warn('GetSceneItemList failed for', sceneName, err.message);
     return [];
   }
 }
@@ -227,8 +227,8 @@ async function getProgramSceneName() {
   try {
     const resp = await obs.call('GetCurrentProgramScene');
     return resp.currentProgramSceneName || null;
-  } catch (e) {
-    console.warn('GetCurrentProgramScene failed', e.message);
+  } catch (err) {
+    console.warn('GetCurrentProgramScene failed', err.message);
     return null;
   }
 }
@@ -237,7 +237,7 @@ async function getPreviewSceneName() {
   try {
     const resp = await obs.call('GetCurrentPreviewScene');
     return resp.currentPreviewSceneName || null;
-  } catch (e) {
+  } catch (_) {
     return null;
   }
 }
@@ -347,7 +347,7 @@ function startAdmin(){
     const heartbeat = setInterval(() => {
       try {
         res.write(': ping\n\n');
-      } catch (_error) {
+      } catch (_) {
         clearInterval(heartbeat);
       }
     }, 15000);
@@ -479,4 +479,7 @@ setInterval(() => {
 }, 2000);
 console.log(`UDP broadcast on port ${BROADCAST_PORT}: ${discoveryPayload}`);
 
+// ponytail: top-level error boundary — log, don't crash
+process.on('uncaughtException', (e) => console.error('[FATAL]', e));
+process.on('unhandledRejection', (e) => console.error('[FATAL]', e));
 connectLoop().catch((e) => console.error(e));
