@@ -50,7 +50,7 @@ data class BridgeSettings(
     val focusAuto: Boolean = true,
     val frameRate: Int = 24,
     val resolutionPreset: ResolutionPreset = ResolutionPreset.P720,
-    val jpegQuality: Int = 72,
+    val jpegQuality: Int = 85, // ponytail: raised from 72 — better 4K detail, ~3ms overhead
     val bitrateMbps: Int = 4,
     val focusVelocity: Float = 0.1f,
     val zoomVelocity: Float = 0.1f,
