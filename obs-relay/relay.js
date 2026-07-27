@@ -8,6 +8,7 @@ const OBS_PASSWORD = process.env.OBS_PASSWORD || '';
 const SOURCE_NAME = process.env.SOURCE_NAME || 'Browser Full';
 const POLL_ON_START = process.env.POLL_ON_START !== 'false';
 const DEVICE_STALE_MS = Number(process.env.DEVICE_STALE_MS || 10000);
+const DEVICE_GC_AGE_MS = Number(process.env.DEVICE_GC_AGE_MS || 300000); // 5min, remove if no ping
 
 const ADMIN_PORT = process.env.ADMIN_PORT || 3000;
 
@@ -43,12 +44,21 @@ function upsertDevice(payload) {
   }
 
   const previous = devices[recordId] || {};
+
+  // ponytail: rtt from phone (previous cycle), half is one-way latency — no clock drift
+  let latencyMs = null;
+  if (payload && payload.rtt !== undefined) {
+    const rtt = Number(payload.rtt);
+    if (Number.isFinite(rtt) && rtt > 0) latencyMs = Math.round(rtt / 2);
+  }
+
   devices[recordId] = {
     id: recordId,
     name: incomingName || previous.name || '',
     sourceName: incomingSourceName || previous.sourceName || '',
     url: incomingUrl || previous.url || '',
     lastSeen: now,
+    latencyMs,
     batteryLevel: payload && payload.batteryLevel !== undefined ? Number(payload.batteryLevel) : (previous.batteryLevel !== undefined ? previous.batteryLevel : -1),
   };
   saveDevices();
@@ -73,6 +83,7 @@ function serializeDevice(device) {
     sourceName: device.sourceName,
     url: device.url,
     lastSeen: device.lastSeen,
+    latencyMs: device.latencyMs || null,
     batteryLevel: device.batteryLevel !== undefined ? device.batteryLevel : -1,
   };
 }
@@ -114,7 +125,7 @@ async function collectDiagnostics() {
         sourceName,
         url: device.url,
         lastSeen: device.lastSeen,
-        latencyMs: device.latencyMs,
+        latencyMs: device.latencyMs || null,
         fresh: isDeviceFresh(device),
         ageMs,
         state: inProgram ? 'PROGRAM' : inPreview ? 'PREVIEW' : 'IDLE',
@@ -320,13 +331,43 @@ function installEventHandlers() {
 // ponytail: WebSocket tally push — phone→relay persistent connection, no more failed HTTP tally
 const phoneSockets = new Map(); // deviceId → WebSocket
 
+// ponytail: WS keepalive pings every 15s, drop stale sockets after 3 missed pongs
+const WS_PING_INTERVAL = 15000;
+const WS_PONG_TIMEOUT = 45000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, ws] of phoneSockets) {
+    if (ws._lastPong && now - ws._lastPong > WS_PONG_TIMEOUT) {
+      console.log('Tally WebSocket stale, terminating:', id);
+      ws.terminate();
+      phoneSockets.delete(id);
+      continue;
+    }
+    if (ws.readyState === WebSocket.OPEN) ws.ping();
+  }
+}, WS_PING_INTERVAL);
+
+// ponytail: GC stale device entries every 60s — phone may have been shut down without de-registering
+setInterval(() => {
+  const now = Date.now();
+  let removed = 0;
+  for (const [id, device] of Object.entries(devices)) {
+    if (device.lastSeen && (now - device.lastSeen) > DEVICE_GC_AGE_MS) {
+      delete devices[id];
+      phoneSockets.delete(id);
+      removed++;
+    }
+  }
+  if (removed > 0) { saveDevices(); console.log('GC removed', removed, 'stale devices'); }
+}, 60000);
+
 // --- Admin server (Express) + WebSocket server
 const express = require('express');
 function startAdmin(){
   loadDevices();
   console.log('Loaded devices:', Object.keys(devices).length);
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
   app.use('/', express.static(path.join(__dirname,'admin')));
   app.get('/events', (req, res) => {
     res.writeHead(200, {
@@ -362,18 +403,18 @@ function startAdmin(){
     res.json(list);
   });
   app.post('/api/register', (req,res)=>{
-    const {id,name,sourceName,url} = req.body || {};
+    const {id,name,sourceName,url,batteryLevel,rtt} = req.body || {};
     if(!url) return res.status(400).json({error:'url required'});
-    const device = upsertDevice({ id, name, sourceName, url });
+    const device = upsertDevice({ id, name, sourceName, url, batteryLevel, rtt });
     console.log('REGISTER', { id: device.id, name: device.name, sourceName: device.sourceName, url: device.url });
     void evaluateTally();
     void publishAdminState('register');
     res.json({ok:true,id:device.id});
   });
   app.post('/api/ping', (req,res)=>{
-    const {id,name,sourceName,url} = req.body || {};
+    const {id,name,sourceName,url,batteryLevel,rtt} = req.body || {};
     if(!url) return res.status(400).json({error:'url required'});
-    const device = upsertDevice({ id, name, sourceName, url });
+    const device = upsertDevice({ id, name, sourceName, url, batteryLevel, rtt });
     console.log('PING', { id: device.id, name: device.name, sourceName: device.sourceName, url: device.url });
     void evaluateTally();
     void publishAdminState('ping');
@@ -396,8 +437,9 @@ function startAdmin(){
     const device = devices[req.params.id];
     if (!device || !device.url) return res.status(404).end();
     const streamUrl = device.url.replace('http://', 'https://').replace(/\/+$/, '') + '/stream.mjpg';
+    let proxyRes = null;
     try {
-      const proxyRes = await new Promise((resolve, reject) => {
+      proxyRes = await new Promise((resolve, reject) => {
         https.get(streamUrl, { rejectUnauthorized: false }, resolve).on('error', reject);
       });
       res.writeHead(200, {
@@ -405,7 +447,11 @@ function startAdmin(){
         'Cache-Control': 'no-cache',
       });
       proxyRes.pipe(res);
-    } catch { res.status(502).end(); }
+      // ponytail: destroy phone connection when OBS disconnects — leak turned into stale connections
+      res.on('close', () => { proxyRes?.destroy(); proxyRes = null; });
+      res.on('error', () => { proxyRes?.destroy(); proxyRes = null; });
+      proxyRes.on('error', () => { res.destroy(); proxyRes = null; });
+    } catch (e) { console.warn('stream proxy error', e?.message); res.status(502).end(); }
   });
 
   const server = http.createServer(app);
@@ -413,6 +459,8 @@ function startAdmin(){
 
   wss.on('connection', (ws) => {
     let deviceId = null;
+    ws._lastPong = Date.now();
+    ws.on('pong', () => { ws._lastPong = Date.now(); });
     ws.on('message', (data) => {
       try {
         const msg = JSON.parse(data);
@@ -421,12 +469,12 @@ function startAdmin(){
           phoneSockets.set(deviceId, ws);
           console.log('Tally WebSocket connected:', deviceId);
         }
-      } catch (_) {}
+      } catch (e) { console.warn('WS message parse error', e?.message); }
     });
     ws.on('close', () => {
       if (deviceId) { phoneSockets.delete(deviceId); console.log('Tally WebSocket disconnected:', deviceId); }
     });
-    ws.on('error', () => {});
+    ws.on('error', (e) => { console.warn('Tally WS error', e?.message); });
   });
 
   server.listen(ADMIN_PORT, () => console.log('Admin UI + WebSocket on http://localhost:'+ADMIN_PORT));

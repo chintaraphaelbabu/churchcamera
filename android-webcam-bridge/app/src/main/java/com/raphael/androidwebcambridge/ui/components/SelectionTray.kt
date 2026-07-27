@@ -43,9 +43,10 @@ fun <T> SelectionTray(
                     Surface(
                         color = Color(0x88FFFFFF),
                         shape = RectangleShape,
-                        modifier = Modifier
-                            .height(44.dp)
-                            .clickable { onSelect(option) },
+                        modifier =
+                            Modifier
+                                .height(44.dp)
+                                .clickable { onSelect(option) },
                     ) {
                         Box(
                             modifier = Modifier.padding(horizontal = 14.dp),

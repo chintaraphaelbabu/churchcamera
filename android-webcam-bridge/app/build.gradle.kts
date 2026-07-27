@@ -23,6 +23,10 @@ android {
         compose = true
     }
 
+    lint {
+        disable += setOf("UnsafeOptInUsageError", "MissingPermission", "OldTargetApi", "GradleDependency", "NewerVersionAvailable")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

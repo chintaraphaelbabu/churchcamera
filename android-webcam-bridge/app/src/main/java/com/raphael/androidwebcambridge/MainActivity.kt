@@ -7,8 +7,8 @@ import androidx.activity.compose.setContent
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.raphael.androidwebcambridge.bridge.BridgeState
 import com.raphael.androidwebcambridge.bridge.BridgeViewModel
-import com.raphael.androidwebcambridge.ui.theme.AndroidWebcamBridgeTheme
 import com.raphael.androidwebcambridge.ui.CameraScreen
+import com.raphael.androidwebcambridge.ui.theme.AndroidWebcamBridgeTheme
 
 class MainActivity : ComponentActivity() {
     private var bridgeViewModel: BridgeViewModel? = null
@@ -24,7 +24,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+    override fun onKeyDown(
+        keyCode: Int,
+        event: KeyEvent?,
+    ): Boolean {
         val vm = bridgeViewModel ?: return super.onKeyDown(keyCode, event)
         val state = vm.state.value
 
@@ -42,13 +45,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
             BridgeState.RailType.ZOOM -> {
+                val curCombined = state.settings.physicalZoomRatio * state.settings.zoomRatio
                 when (keyCode) {
                     KeyEvent.KEYCODE_VOLUME_UP -> {
-                        vm.setZoom((state.settings.physicalZoomRatio + state.settings.zoomVelocity).coerceAtMost(5f))
+                        vm.setZoom((curCombined + state.settings.zoomVelocity).coerceAtMost(10f))
                         return true
                     }
                     KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                        vm.setZoom((state.settings.physicalZoomRatio - state.settings.zoomVelocity).coerceAtLeast(1f))
+                        vm.setZoom((curCombined - state.settings.zoomVelocity).coerceAtLeast(1f))
                         return true
                     }
                 }

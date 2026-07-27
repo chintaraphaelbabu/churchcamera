@@ -29,65 +29,69 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun PermissionGate(onGrant: () -> Unit) {
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0F172A)),
-        contentAlignment = Alignment.Center
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xFF0F172A)),
+        contentAlignment = Alignment.Center,
     ) {
         Column(
-            modifier = Modifier
-                .padding(32.dp),
+            modifier =
+                Modifier
+                    .padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Center,
         ) {
             Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .background(Color(0xFF1E293B), RoundedCornerShape(24.dp)),
-                contentAlignment = Alignment.Center
+                modifier =
+                    Modifier
+                        .size(80.dp)
+                        .background(Color(0xFF1E293B), RoundedCornerShape(24.dp)),
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Default.CameraAlt,
                     contentDescription = null,
                     tint = Color(0xFF4ADE80),
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(40.dp),
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(24.dp))
-            
+
             Text(
                 text = "Camera Access",
                 style = MaterialTheme.typography.headlineMedium,
                 color = Color.White,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
             )
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             Text(
                 text = "To bridge your phone as a high-quality webcam, we need permission to use the camera.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = Color(0xFF94A3B8),
                 textAlign = TextAlign.Center,
-                lineHeight = 24.sp
+                lineHeight = 24.sp,
             )
-            
+
             Spacer(modifier = Modifier.height(32.dp))
-            
+
             Button(
                 onClick = onGrant,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF4ADE80),
-                    contentColor = Color(0xFF0F172A)
-                ),
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF4ADE80),
+                        contentColor = Color(0xFF0F172A),
+                    ),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(56.dp)
+                modifier = Modifier.height(56.dp),
             ) {
                 Text(
                     text = "Grant Permission",
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 24.dp)
+                    modifier = Modifier.padding(horizontal = 24.dp),
                 )
             }
         }

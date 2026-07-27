@@ -1,8 +1,8 @@
 package com.raphael.androidwebcambridge.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,9 +38,10 @@ fun TopStrip(
     onPttRelease: () -> Unit = {},
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top,
     ) {
@@ -48,34 +49,43 @@ fun TopStrip(
 
         Row(
             modifier = Modifier.padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             PttButton(speaking = state.operatorSpeaking, onPress = onPttPress, onRelease = onPttRelease)
             CircleButton(
                 icon = Icons.Filled.Cameraswitch,
                 onClick = onLensClick,
-                contentDescription = "Switch Camera"
+                contentDescription = "Switch Camera",
             )
         }
     }
 }
 
 @Composable
-fun PttButton(speaking: Boolean, onPress: () -> Unit, onRelease: () -> Unit) {
+fun PttButton(
+    speaking: Boolean,
+    onPress: () -> Unit,
+    onRelease: () -> Unit,
+) {
     Surface(
         color = if (speaking) Color(0xFFEF4444) else Color(0x990F172A),
         shape = CircleShape,
-        modifier = Modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
+        modifier =
+            Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
                         onPress()
-                        try { awaitRelease() } finally { onRelease() }
+                        try {
+                            // ponytail: wait for release, no slop or timeout
+                            while (awaitPointerEvent().changes.any { it.pressed });
+                        } finally {
+                            onRelease()
+                        }
                     }
-                )
-            },
+                },
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Mic, contentDescription = "Push to Talk", tint = Color.White, modifier = Modifier.size(20.dp))
@@ -87,15 +97,16 @@ fun PttButton(speaking: Boolean, onPress: () -> Unit, onRelease: () -> Unit) {
 private fun CircleButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit,
-    contentDescription: String
+    contentDescription: String,
 ) {
     Surface(
         color = Color(0x990F172A),
         shape = CircleShape,
-        modifier = Modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onClick),
+        modifier =
+            Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onClick),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
@@ -117,7 +128,7 @@ private fun TopInfoBar(state: BridgeState) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 InfoBadge(text = state.settings.resolutionPreset.label)
                 InfoBadge(text = "ISO ${state.settings.iso}")
@@ -127,7 +138,7 @@ private fun TopInfoBar(state: BridgeState) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(top = 4.dp)
+                modifier = Modifier.padding(top = 4.dp),
             ) {
                 if (state.serverRunning) {
                     StatusBadge(text = "SERVER STARTED", color = Color(0xFF00FF37))
@@ -141,13 +152,16 @@ private fun TopInfoBar(state: BridgeState) {
 }
 
 @Composable
-private fun StatusBadge(text: String, color: Color) {
+private fun StatusBadge(
+    text: String,
+    color: Color,
+) {
     Text(
         text = text,
         color = color,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
-        letterSpacing = 1.sp
+        letterSpacing = 1.sp,
     )
 }
 
@@ -157,6 +171,6 @@ private fun InfoBadge(text: String) {
         text = text,
         color = Color(0xFFCBD5E1),
         style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Medium
+        fontWeight = FontWeight.Medium,
     )
 }

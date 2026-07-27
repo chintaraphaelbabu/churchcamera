@@ -28,16 +28,18 @@ fun BottomStrip(
     onRailClick: (BridgeState.RailType) -> Unit,
 ) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
         color = Color(0x990F172A),
-        shape = RoundedCornerShape(20.dp)
+        shape = RoundedCornerShape(20.dp),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             ControlTile(
@@ -47,7 +49,7 @@ fun BottomStrip(
                 isRailActive = activeRail == BridgeState.RailType.ISO,
                 onClick = { onControlClick(OverlayControl.ISO) },
                 onLongClick = { onRailClick(BridgeState.RailType.ISO) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             )
             ControlTile(
                 label = "SHUTTER",
@@ -56,21 +58,21 @@ fun BottomStrip(
                 isRailActive = activeRail == BridgeState.RailType.SHUTTER,
                 onClick = { onControlClick(OverlayControl.SHUTTER) },
                 onLongClick = { onRailClick(BridgeState.RailType.SHUTTER) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             )
             ControlTile(
                 label = "WB",
                 reading = if (state.settings.whiteBalanceKelvin == 0) "AUTO" else "${state.settings.whiteBalanceKelvin}K",
                 active = isControlActive(OverlayControl.WB),
                 onClick = { onControlClick(OverlayControl.WB) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             )
             ControlTile(
                 label = "RES",
                 reading = state.settings.resolutionPreset.label,
                 active = isControlActive(OverlayControl.RESOLUTION),
                 onClick = { onControlClick(OverlayControl.RESOLUTION) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -85,25 +87,26 @@ private fun ControlTile(
     isRailActive: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Box(
-        modifier = modifier
-            .height(60.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                when {
-                    isRailActive -> Color(0xFF0F172A) // Dark when active for volume
-                    active -> Color(0xFF4ADE80)
-                    else -> Color(0x33FFFFFF)
-                }
-            )
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .padding(horizontal = 4.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
+        modifier =
+            modifier
+                .height(60.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    when {
+                        isRailActive -> Color(0xFF0F172A) // Dark when active for volume
+                        active -> Color(0xFF4ADE80)
+                        else -> Color(0x33FFFFFF)
+                    },
+                )
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Column(
             verticalArrangement = Arrangement.Center,
@@ -114,13 +117,13 @@ private fun ControlTile(
                 color = if (active) Color(0xFF0F172A) else Color(0xFF94A3B8),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp
+                letterSpacing = 1.sp,
             )
             Text(
                 text = reading,
                 color = if (active) Color(0xFF0F172A) else Color.White,
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
             )
         }
     }

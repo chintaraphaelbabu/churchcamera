@@ -25,68 +25,74 @@ fun ZoomRail(
     onActiveChange: (Boolean) -> Unit,
 ) {
     Box(
-        modifier = Modifier
-            .width(64.dp)
-            .fillMaxHeight()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xCC1A1A2E))
-            .border(
-                1.dp,
-                if (isActive) Color(0xFF4ADE80) else Color(0x33FFFFFF),
-                RoundedCornerShape(16.dp)
-            )
-            .clickable { onActiveChange(true) },
-        contentAlignment = Alignment.Center
-    ) {
-
-        Column(
-            modifier = Modifier
+        modifier =
+            Modifier
+                .width(64.dp)
                 .fillMaxHeight()
-                .padding(vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xCC1A1A2E))
+                .border(
+                    1.dp,
+                    if (isActive) Color(0xFF4ADE80) else Color(0x33FFFFFF),
+                    RoundedCornerShape(16.dp),
+                )
+                .clickable { onActiveChange(true) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxHeight()
+                    .padding(vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-
             Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x66000000))
-                    .clickable { onIncrease() },
-                contentAlignment = Alignment.Center
+                modifier =
+                    Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x66000000))
+                        .clickable { onIncrease() },
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
                     "+",
                     color = Color.White,
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleMedium,
                 )
             }
 
             VerticalSlider(
                 value = value,
-                valueRange = 1f..5f,
+                valueRange = 1f..10f,
                 onValueChange = onValueChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                 thumbColor =
-                    if (isActive) Color(0xFF4ADE80)
-                    else Color.White,
+                    if (isActive) {
+                        Color(0xFF4ADE80)
+                    } else {
+                        Color.White
+                    },
                 activeTrackColor = Color(0xFF4ADE80),
-                trackColor = Color(0x55FFFFFF)
+                trackColor = Color(0x55FFFFFF),
             )
 
             Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x66000000))
-                    .clickable { onDecrease() },
-                contentAlignment = Alignment.Center
+                modifier =
+                    Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x66000000))
+                        .clickable { onDecrease() },
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
                     "-",
                     color = Color.White,
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleMedium,
                 )
             }
 
@@ -95,7 +101,7 @@ fun ZoomRail(
             Text(
                 text = String.format(Locale.US, "%.1fx", value),
                 color = Color.White,
-                style = MaterialTheme.typography.labelSmall
+                style = MaterialTheme.typography.labelSmall,
             )
         }
     }
