@@ -6,7 +6,7 @@ import org.json.JSONObject
 enum class TallyState {
     IDLE,
     PREVIEW,
-    PROGRAM
+    PROGRAM,
 }
 
 enum class ResolutionPreset(val label: String, val width: Int, val height: Int) {
@@ -23,15 +23,18 @@ data class LensInfo(
     val megapixels: Int,
     val focalLengthMm: Float,
     val aperture: Float?,
+    val maxPhysicalZoom: Float = 1.0f,
 ) {
     fun shortDisplayName(): String = "$label ($megapixels MP)"
-    fun toJson(): JSONObject = JSONObject()
-        .put("cameraId", cameraId)
-        .put("label", label)
-        .put("facing", facing)
-        .put("megapixels", megapixels)
-        .put("focalLengthMm", focalLengthMm)
-        .put("aperture", aperture ?: JSONObject.NULL)
+
+    fun toJson(): JSONObject =
+        JSONObject()
+            .put("cameraId", cameraId)
+            .put("label", label)
+            .put("facing", facing)
+            .put("megapixels", megapixels)
+            .put("focalLengthMm", focalLengthMm)
+            .put("aperture", aperture ?: JSONObject.NULL)
 }
 
 data class BridgeSettings(
@@ -50,35 +53,45 @@ data class BridgeSettings(
     val focusAuto: Boolean = true,
     val frameRate: Int = 24,
     val resolutionPreset: ResolutionPreset = ResolutionPreset.P720,
-    val jpegQuality: Int = 72,
+    val jpegQuality: Int = 60, // ponytail: 60 still looks fine on OBS, halves bandwidth vs 95
     val bitrateMbps: Int = 4,
     val focusVelocity: Float = 0.1f,
     val zoomVelocity: Float = 0.1f,
+    val screenDimEnabled: Boolean = false,
 ) {
-    fun toJson(): JSONObject = JSONObject()
-        .put("selectedCameraId", selectedCameraId ?: JSONObject.NULL)
-        .put("physicalZoomRatio", physicalZoomRatio)
-        .put("zoomRatio", zoomRatio)
-        .put("panX", panX)
-        .put("panY", panY)
-        .put("faceFollowEnabled", faceFollowEnabled)
-        .put("selectedFaceId", selectedFaceId ?: JSONObject.NULL)
-        .put("exposureCompensation", exposureCompensation)
-        .put("iso", iso)
-        .put("shutterSpeedMs", shutterSpeedMs)
-        .put("whiteBalanceKelvin", whiteBalanceKelvin)
-        .put("focusDistanceDiopters", focusDistanceDiopters)
-        .put("focusAuto", focusAuto)
-        .put("frameRate", frameRate)
-        .put("resolutionPreset", resolutionPreset.name)
-        .put("jpegQuality", jpegQuality)
-        .put("bitrateMbps", bitrateMbps)
-        .put("focusVelocity", focusVelocity)
-        .put("zoomVelocity", zoomVelocity)
+    fun toJson(): JSONObject =
+        JSONObject()
+            .put("selectedCameraId", selectedCameraId ?: JSONObject.NULL)
+            .put("physicalZoomRatio", physicalZoomRatio)
+            .put("zoomRatio", zoomRatio)
+            .put("panX", panX)
+            .put("panY", panY)
+            .put("faceFollowEnabled", faceFollowEnabled)
+            .put("selectedFaceId", selectedFaceId ?: JSONObject.NULL)
+            .put("exposureCompensation", exposureCompensation)
+            .put("iso", iso)
+            .put("shutterSpeedMs", shutterSpeedMs)
+            .put("whiteBalanceKelvin", whiteBalanceKelvin)
+            .put("focusDistanceDiopters", focusDistanceDiopters)
+            .put("focusAuto", focusAuto)
+            .put("frameRate", frameRate)
+            .put("resolutionPreset", resolutionPreset.name)
+            .put("jpegQuality", jpegQuality)
+            .put("bitrateMbps", bitrateMbps)
+            .put("focusVelocity", focusVelocity)
+            .put("zoomVelocity", zoomVelocity)
+            .put("screenDimEnabled", screenDimEnabled)
 
     companion object {
-        fun fromQuery(query: Map<String, String?>, current: BridgeSettings): BridgeSettings {
-            fun <T> read(name: String, parser: (String) -> T, fallback: T): T {
+        fun fromQuery(
+            query: Map<String, String?>,
+            current: BridgeSettings,
+        ): BridgeSettings {
+            fun <T> read(
+                name: String,
+                parser: (String) -> T,
+                fallback: T,
+            ): T {
                 val raw = query[name] ?: return fallback
                 return runCatching { parser(raw) }.getOrElse { fallback }
             }
@@ -96,15 +109,17 @@ data class BridgeSettings(
                 shutterSpeedMs = read("shutterSpeedMs", String::toInt, current.shutterSpeedMs),
                 whiteBalanceKelvin = read("whiteBalanceKelvin", String::toInt, current.whiteBalanceKelvin),
                 focusDistanceDiopters = read("focusDistanceDiopters", String::toFloat, current.focusDistanceDiopters),
-                focusAuto = query["focusAuto"]?.let { 
-                    it.lowercase() == "true" || it == "1" 
-                } ?: current.focusAuto,
+                focusAuto =
+                    query["focusAuto"]?.let {
+                        it.lowercase() == "true" || it == "1"
+                    } ?: current.focusAuto,
                 frameRate = read("frameRate", String::toInt, current.frameRate),
                 resolutionPreset = read("resolutionPreset", ResolutionPreset::valueOf, current.resolutionPreset),
                 jpegQuality = read("jpegQuality", String::toInt, current.jpegQuality),
                 bitrateMbps = read("bitrateMbps", String::toInt, current.bitrateMbps),
                 focusVelocity = read("focusVelocity", String::toFloat, current.focusVelocity),
                 zoomVelocity = read("zoomVelocity", String::toFloat, current.zoomVelocity),
+                screenDimEnabled = query["screenDimEnabled"]?.let { it == "true" || it == "1" } ?: current.screenDimEnabled,
             )
         }
     }
@@ -115,14 +130,15 @@ data class DetectedFace(
     val x: Float, // Normalized 0..1
     val y: Float, // Normalized 0..1
     val width: Float,
-    val height: Float
+    val height: Float,
 ) {
-    fun toJson(): JSONObject = JSONObject()
-        .put("id", id)
-        .put("x", x)
-        .put("y", y)
-        .put("width", width)
-        .put("height", height)
+    fun toJson(): JSONObject =
+        JSONObject()
+            .put("id", id)
+            .put("x", x)
+            .put("y", y)
+            .put("width", width)
+            .put("height", height)
 }
 
 data class BridgeState(
@@ -151,32 +167,35 @@ data class BridgeState(
     val relayDiscoveryStatus: String = "",
     val batteryLevel: Int = -1,
     val operatorSpeaking: Boolean = false,
+    val maxPhysicalZoom: Float = 3.0f, // ponytail: safe default, updated when lens selected
 ) {
     enum class RailType { FOCUS, ZOOM, ISO, SHUTTER }
-    fun toJson(): JSONObject = JSONObject()
-        .put("serverRunning", serverRunning)
-        .put("streaming", streaming)
-        .put("connectedClients", connectedClients)
-        .put("lastFrameAt", lastFrameAt ?: JSONObject.NULL)
-        .put("statusMessage", statusMessage)
-        .put("errorMessage", errorMessage ?: JSONObject.NULL)
-        .put("dashboardUrl", dashboardUrl)
-        .put("streamUrl", streamUrl)
-        .put("settings", settings.toJson())
-        .put("detectedFaces", JSONArray(detectedFaces.map { it.toJson() }))
-        .put("selectedFaceId", selectedFaceId ?: JSONObject.NULL)
-        .put("cameraReady", cameraReady)
-        .put("cameraStatus", cameraStatus)
-        .put("obsActive", obsActive)
-        .put("tallyState", tallyState.name)
-        .put("cameraRebindToken", cameraRebindToken)
-        .put("localIpAddress", localIpAddress)
-        .put("availableLenses", JSONArray(availableLenses.map { it.toJson() }))
-        .put("relayHost", relayHost)
-        .put("relaySourceName", relaySourceName)
-        .put("relayDiscoveryStatus", relayDiscoveryStatus)
-        .put("batteryLevel", batteryLevel)
-        .put("operatorSpeaking", operatorSpeaking)
+
+    fun toJson(): JSONObject =
+        JSONObject()
+            .put("serverRunning", serverRunning)
+            .put("streaming", streaming)
+            .put("connectedClients", connectedClients)
+            .put("lastFrameAt", lastFrameAt ?: JSONObject.NULL)
+            .put("statusMessage", statusMessage)
+            .put("errorMessage", errorMessage ?: JSONObject.NULL)
+            .put("dashboardUrl", dashboardUrl)
+            .put("streamUrl", streamUrl)
+            .put("settings", settings.toJson())
+            .put("detectedFaces", JSONArray(detectedFaces.map { it.toJson() }))
+            .put("selectedFaceId", selectedFaceId ?: JSONObject.NULL)
+            .put("cameraReady", cameraReady)
+            .put("cameraStatus", cameraStatus)
+            .put("obsActive", obsActive)
+            .put("tallyState", tallyState.name)
+            .put("cameraRebindToken", cameraRebindToken)
+            .put("localIpAddress", localIpAddress)
+            .put("availableLenses", JSONArray(availableLenses.map { it.toJson() }))
+            .put("relayHost", relayHost)
+            .put("relaySourceName", relaySourceName)
+            .put("relayDiscoveryStatus", relayDiscoveryStatus)
+            .put("batteryLevel", batteryLevel)
+            .put("operatorSpeaking", operatorSpeaking)
 }
 
 // ponytail: camera-style 1/<value> format

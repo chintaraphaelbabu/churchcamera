@@ -1,7 +1,8 @@
 package com.raphael.androidwebcambridge.bridge
 
 object BridgeHtmlAssets {
-    fun obsBridgePage(): String = """
+    fun obsBridgePage(): String =
+        """
         <!doctype html>
         <html>
           <head>
@@ -91,9 +92,10 @@ object BridgeHtmlAssets {
             </script>
           </body>
         </html>
-    """.trimIndent()
+        """.trimIndent()
 
-    fun landingPage(): String = """
+    fun landingPage(): String =
+        """
         <!doctype html>
         <html>
           <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>StreamCam Pro</title></head>
@@ -104,9 +106,10 @@ object BridgeHtmlAssets {
             <p>API: <code>/api/state</code></p>
           </body>
         </html>
-    """.trimIndent()
+        """.trimIndent()
 
-    fun dashboardPage(): String = """
+    fun dashboardPage(): String =
+        """
         <!doctype html>
         <html>
           <head>
@@ -183,7 +186,7 @@ object BridgeHtmlAssets {
                     <button id="btn-FOLLOW" style="padding:2px 8px;font-size:10px">Follow Faces</button>
                   </div>
                   <div style="display:flex; gap:12px">
-                    <div class="framing-area" id="framingArea" style="flex:1">
+                    <div class="framing-area" id="framingArea" style="flex:1" tabindex="0">
                       <div class="framing-target" id="framingTarget"></div>
                     </div>
                     <div class="zoom-v-wrap">
@@ -476,6 +479,18 @@ object BridgeHtmlAssets {
                 target.style.height = (100 / z) + '%';
                 throttledPush({ zoomRatio: zoom.value });
               };
+              zoom.addEventListener('keydown', (e) => {
+                const step = e.shiftKey ? 1.0 : 0.1;
+                const val = parseFloat(zoom.value);
+                let next = val;
+                if (e.key === 'ArrowUp' || e.key === 'ArrowRight') next = Math.min(10, val + step);
+                else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') next = Math.max(1, val - step);
+                else return;
+                e.preventDefault();
+                zoom.value = next;
+                zoomVal.textContent = next.toFixed(1) + 'x';
+                throttledPush({ zoomRatio: next });
+              });
               
               const framingArea = document.getElementById('framingArea');
               const handleFraming = (e) => {
@@ -509,6 +524,24 @@ object BridgeHtmlAssets {
               
               framingArea.addEventListener('touchstart', (e) => { handleFraming(e); framingArea.addEventListener('touchmove', handleFraming); }, {passive: false});
               framingArea.addEventListener('touchend', () => { framingArea.removeEventListener('touchmove', handleFraming); });
+              framingArea.addEventListener('keydown', (e) => {
+                const step = e.shiftKey ? 0.10 : 0.02;
+                const set = latestSettings || {};
+                let px = set.panX || 0, py = set.panY || 0;
+                if (e.key === 'ArrowUp') py = Math.max(-1, py - step);
+                else if (e.key === 'ArrowDown') py = Math.min(1, py + step);
+                else if (e.key === 'ArrowLeft') px = Math.max(-1, px - step);
+                else if (e.key === 'ArrowRight') px = Math.min(1, px + step);
+                else return;
+                e.preventDefault();
+                // ponytail: snap via re-centering rather than full click compute
+                const z = parseFloat(zoom.value);
+                const x = 0.5 + (px / 2) * (1 - 1/z);
+                const y = 0.5 + (py / 2) * (1 - 1/z);
+                document.getElementById('framingTarget').style.left = (x * 100) + '%';
+                document.getElementById('framingTarget').style.top = (y * 100) + '%';
+                throttledPush({ panX: px.toFixed(3), panY: py.toFixed(3) });
+              });
 
               const fSlider = document.getElementById('f-slider');
               fSlider.oninput = () => { 
@@ -650,5 +683,5 @@ object BridgeHtmlAssets {
             </script>
           </body>
         </html>
-    """.trimIndent()
+        """.trimIndent()
 }

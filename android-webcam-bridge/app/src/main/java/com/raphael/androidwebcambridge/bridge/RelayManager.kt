@@ -32,16 +32,19 @@ class RelayManager(
     private var relayHeartbeatJob: Job? = null
     private var tallyWs: WebSocket? = null
     private var tallyWsReconnectJob: Job? = null
+
     @Volatile
     private var tallyWsReconnectEnabled = true
-    private val discovery = RelayDiscovery { relayUrl ->
-        if (getRelayHost().isNullOrBlank()) {
-            onDiscoveryStatus("Found: $relayUrl")
-            setRelayHost(relayUrl)
+    private val discovery =
+        RelayDiscovery { relayUrl ->
+            if (getRelayHost().isNullOrBlank()) {
+                onDiscoveryStatus("Found: $relayUrl")
+                setRelayHost(relayUrl)
+            }
         }
-    }
 
     fun startDiscovery() = discovery.start()
+
     fun stopDiscovery() = discovery.stop()
 
     fun setRelayHost(host: String) {
@@ -81,31 +84,40 @@ class RelayManager(
         if (relayHeartbeatJob?.isActive == true) return
         val host = normalizeRelayHost(getRelayHost()) ?: return
 
-        relayHeartbeatJob = scope.launch {
-            sendRelayPing()
-            while (true) {
-                delay(10_000L)
+        relayHeartbeatJob =
+            scope.launch {
                 sendRelayPing()
+                while (true) {
+                    delay(10_000L)
+                    sendRelayPing()
+                }
             }
-        }
     }
 
     fun getRelayHost(): String? = prefs.getString("relay_host", null)
+
     private fun getRelaySourceName(): String? = prefs.getString("relay_source_name", null)
+
     private fun getRelayDeviceId(): String? = prefs.getString("relay_device_id", null)
+
     private fun saveRelayDeviceId(id: String?) = prefs.edit().putString("relay_device_id", id).apply()
 
-    private fun getBatteryLevel(): Int = runCatching {
-        (context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager)
-            ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-    }.getOrDefault(-1)
+    private fun getBatteryLevel(): Int =
+        runCatching {
+            (context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager)
+                ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        }.getOrDefault(-1)
 
-    private fun getCurrentSsid(): String = runCatching {
-        val wifi = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return@runCatching ""
-        wifi.connectionInfo.ssid?.trim('"') ?: ""
-    }.getOrDefault("")
+    private fun getCurrentSsid(): String =
+        runCatching {
+            val wifi = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return@runCatching ""
+            wifi.connectionInfo.ssid?.trim('"') ?: ""
+        }.getOrDefault("")
 
-    private fun cacheRelayHost(ssid: String, host: String) {
+    private fun cacheRelayHost(
+        ssid: String,
+        host: String,
+    ) {
         if (ssid.isBlank()) return
         prefs.edit().putString("relay_host_$ssid", host).apply()
     }
@@ -129,33 +141,57 @@ class RelayManager(
         val deviceId = getRelayDeviceId() ?: return
         if (tallyWs != null) return
         val wsUrl = host.replace("http://", "ws://").replace("https://", "wss://").trimEnd('/') + "/tally"
-        val client = OkHttpClient.Builder()
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .build()
+        val client =
+            OkHttpClient.Builder()
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .build()
         val request = Request.Builder().url(wsUrl).build()
-        tallyWs = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
-                ws.send(JSONObject().put("type", "auth").put("deviceId", deviceId).toString())
-            }
-            override fun onMessage(ws: WebSocket, text: String) {
-                try {
-                    val json = JSONObject(text)
-                    if (json.optString("type") == "tally") {
-                        val tallyStr = json.optString("tallyState")
-                        val tally = runCatching { TallyState.valueOf(tallyStr) }.getOrDefault(TallyState.IDLE)
-                        onTallyUpdate?.invoke(tally)
+        tallyWs =
+            client.newWebSocket(
+                request,
+                object : WebSocketListener() {
+                    override fun onOpen(
+                        ws: WebSocket,
+                        response: Response,
+                    ) {
+                        ws.send(JSONObject().put("type", "auth").put("deviceId", deviceId).toString())
                     }
-                } catch (_: Exception) {}
-            }
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                tallyWs = null
-                scheduleWsReconnect()
-            }
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                tallyWs = null
-                scheduleWsReconnect()
-            }
-        })
+
+                    override fun onMessage(
+                        ws: WebSocket,
+                        text: String,
+                    ) {
+                        try {
+                            val json = JSONObject(text)
+                            if (json.optString("type") == "tally") {
+                                val tallyStr = json.optString("tallyState")
+                                val tally = runCatching { TallyState.valueOf(tallyStr) }.getOrDefault(TallyState.IDLE)
+                                onTallyUpdate?.invoke(tally)
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.w("RelayMgr", "tally WS onMessage: ${e.message}")
+                        }
+                    }
+
+                    override fun onClosed(
+                        ws: WebSocket,
+                        code: Int,
+                        reason: String,
+                    ) {
+                        tallyWs = null
+                        scheduleWsReconnect()
+                    }
+
+                    override fun onFailure(
+                        ws: WebSocket,
+                        t: Throwable,
+                        response: Response?,
+                    ) {
+                        tallyWs = null
+                        scheduleWsReconnect()
+                    }
+                },
+            )
     }
 
     fun disconnectTallyWebSocket() {
@@ -170,15 +206,17 @@ class RelayManager(
         if (!tallyWsReconnectEnabled) return
         if (tallyWsReconnectJob?.isActive == true) return
         val baseDelay = 1000L
-        tallyWsReconnectJob = scope.launch {
-            var attempt = 0
-            while (isActive && getRelayDeviceId() != null) {
-                delay(baseDelay shl attempt.coerceAtMost(5)) // exponential backoff 1s→32s
-                if (tallyWs == null) connectTallyWebSocket()
-                attempt++
+        tallyWsReconnectJob =
+            scope.launch {
+                var attempt = 0
+                while (isActive && getRelayDeviceId() != null) {
+                    delay(baseDelay shl attempt.coerceAtMost(5)) // exponential backoff 1s→32s
+                    if (tallyWs == null) connectTallyWebSocket()
+                    attempt++
+                }
             }
-        }
     }
+
     private fun normalizeRelayHost(host: String?): String? {
         val trimmed = host?.trim()?.takeIf { it.isNotBlank() } ?: return null
         return when {
@@ -188,7 +226,10 @@ class RelayManager(
         }
     }
 
-    suspend fun registerWithRelay(hostOverride: String? = null, sourceNameOverride: String? = null) {
+    suspend fun registerWithRelay(
+        hostOverride: String? = null,
+        sourceNameOverride: String? = null,
+    ) {
         val host = normalizeRelayHost(hostOverride) ?: normalizeRelayHost(getRelayHost()) ?: return
         val ip = findLocalIpv4Address()
         val callbackBase = "http://$ip:8787"
@@ -196,12 +237,15 @@ class RelayManager(
         val sourceName = sourceNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: getRelaySourceName()?.takeIf { it.isNotBlank() } ?: name
         val existingId = getRelayDeviceId()
         val batteryLevel = getBatteryLevel()
-        
-        val payload = if (existingId.isNullOrBlank()) {
-            "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
-        } else {
-            "{\"id\":\"$existingId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
-        }
+
+        val payload =
+            JSONObject().apply {
+                put("name", name)
+                put("sourceName", sourceName)
+                put("url", callbackBase)
+                put("batteryLevel", batteryLevel)
+                if (!existingId.isNullOrBlank()) put("id", existingId)
+            }.toString()
 
         var lastError: String? = null
         for (attempt in 0 until 3) {
@@ -209,15 +253,18 @@ class RelayManager(
             try {
                 withContext(Dispatchers.IO) {
                     val url = URL(host.trimEnd('/') + "/api/register")
-                    val conn = (url.openConnection() as HttpURLConnection).apply {
-                        requestMethod = "POST"
-                        doOutput = true
-                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                        connectTimeout = 10000
-                        readTimeout = 10000
-                    }
+                    val conn =
+                        (url.openConnection() as HttpURLConnection).apply {
+                            requestMethod = "POST"
+                            doOutput = true
+                            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                            connectTimeout = 10000
+                            readTimeout = 10000
+                        }
+                    val t0 = System.currentTimeMillis()
                     conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
                     val code = conn.responseCode
+                    lastPingRtt = System.currentTimeMillis() - t0 // ponytail: seed RTT from registration
                     if (code in 200..299) {
                         val responseText = conn.inputStream.bufferedReader().use { it.readText() }
                         val idMatch = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(responseText)
@@ -250,6 +297,10 @@ class RelayManager(
         }
     }
 
+    private var lastPingErrorAt = 0L
+    // ponytail: rtt from previous ping, relay divides by 2 for one-way latency (no clock sync needed)
+    private var lastPingRtt = 0L
+
     private suspend fun sendRelayPing() {
         val relayHost = normalizeRelayHost(getRelayHost()) ?: return
         val deviceId = getRelayDeviceId()
@@ -261,24 +312,38 @@ class RelayManager(
         try {
             withContext(Dispatchers.IO) {
                 val url = URL(relayHost.trimEnd('/') + "/api/ping")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                }
+                val conn =
+                    (url.openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                        connectTimeout = 10000
+                        readTimeout = 10000
+                    }
                 val batteryLevel = getBatteryLevel()
-                val payload = if (deviceId.isNullOrBlank()) {
-                    "{\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
-                } else {
-                    "{\"id\":\"$deviceId\",\"name\":\"$name\",\"sourceName\":\"$sourceName\",\"url\":\"$callbackBase\",\"batteryLevel\":$batteryLevel}"
-                }
-                conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+                val payload =
+                    JSONObject().apply {
+                        put("name", name)
+                        put("sourceName", sourceName)
+                        put("url", callbackBase)
+                        put("batteryLevel", batteryLevel)
+                        put("rtt", lastPingRtt) // ponytail: previous cycle's RTT, first ping shows 0
+                        if (!deviceId.isNullOrBlank()) put("id", deviceId)
+                    }.toString()
+                val t0 = System.currentTimeMillis()
+                conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8))}
                 conn.responseCode
                 conn.disconnect()
+                lastPingRtt = System.currentTimeMillis() - t0
             }
             cacheRelayHost(getCurrentSsid(), relayHost)
-        } catch (_: Exception) { }
+            lastPingErrorAt = 0
+        } catch (e: Exception) {
+            val now = System.currentTimeMillis()
+            if (now - lastPingErrorAt > 30_000L) {
+                lastPingErrorAt = now
+                onDiscoveryStatus("Ping failed: ${e.message}")
+            }
+        }
     }
 }

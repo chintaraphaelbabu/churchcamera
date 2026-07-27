@@ -23,24 +23,25 @@ fun SettingsTray(
 ) {
     Surface(color = Color(0xCCFFFFFF), shape = RectangleShape) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("CONTROL VELOCITY", color = Color.Black, style = MaterialTheme.typography.titleMedium)
-            
+
             Column {
                 Text(
                     text = String.format(Locale.US, "Focus Sensitivity: %.2f", focusVelocity),
                     color = Color.Black,
-                    style = MaterialTheme.typography.labelMedium
+                    style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
                     value = focusVelocity,
                     onValueChange = onFocusVelocityChange,
                     valueRange = 0.01f..0.5f,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
 
@@ -48,28 +49,34 @@ fun SettingsTray(
                 Text(
                     text = String.format(Locale.US, "Zoom Sensitivity: %.2f", zoomVelocity),
                     color = Color.Black,
-                    style = MaterialTheme.typography.labelMedium
+                    style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
                     value = zoomVelocity,
                     onValueChange = onZoomVelocityChange,
                     valueRange = 0.01f..0.5f,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text("Focus Peaking", color = Color.Black, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.weight(1f))
-                Switch(checked = focusPeakingEnabled, onCheckedChange = onFocusPeakingToggle,
-                    colors = SwitchDefaults.colors(checkedThumbColor = Color.Red, checkedTrackColor = Color.Red.copy(alpha = 0.4f)))
+                Switch(
+                    checked = focusPeakingEnabled,
+                    onCheckedChange = onFocusPeakingToggle,
+                    colors = SwitchDefaults.colors(checkedThumbColor = Color.Red, checkedTrackColor = Color.Red.copy(alpha = 0.4f)),
+                )
             }
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text("Grid Overlay", color = Color.Black, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.weight(1f))
-                Switch(checked = showGrid, onCheckedChange = onGridToggle,
-                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color.White.copy(alpha = 0.4f)))
+                Switch(
+                    checked = showGrid,
+                    onCheckedChange = onGridToggle,
+                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color.White.copy(alpha = 0.4f)),
+                )
             }
         }
     }
