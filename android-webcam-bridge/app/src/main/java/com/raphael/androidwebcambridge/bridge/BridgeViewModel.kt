@@ -86,7 +86,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     private val server =
         LocalBridgeServer(
-            sslContext = sslContext,
+            sslContext = null,
             onRemoteUpdate = ::applyRemoteUpdate,
             onConnectionStatusChanged = ::updateClientCount,
         )
