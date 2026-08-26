@@ -91,9 +91,13 @@ class LocalBridgeServer(
             scope.launch {
                 try {
                     serverSocket = listenerFactory.createServerSocket(port) as ServerSocket
-                    secureServerSocket = secureListenerFactory?.createServerSocket(securePort) as? ServerSocket
                     launch { acceptClients(serverSocket) }
-                    acceptClients(secureServerSocket)
+                    try {
+                        secureServerSocket = secureListenerFactory?.createServerSocket(securePort) as? ServerSocket
+                        acceptClients(secureServerSocket)
+                    } catch (error: Exception) {
+                        Log.w(TAG, "secure server socket: ${error.message}")
+                    }
                 } catch (error: Exception) {
                     Log.e(TAG, "server socket: ${error.message}")
                     currentState.get()?.copy(errorMessage = error.message, statusMessage = "Server failed")?.let {

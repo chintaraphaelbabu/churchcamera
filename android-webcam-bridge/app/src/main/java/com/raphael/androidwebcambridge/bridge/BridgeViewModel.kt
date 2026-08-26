@@ -62,11 +62,11 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
             val androidKeyStore = KeyStore.getInstance("AndroidKeyStore")
             androidKeyStore.load(null)
-            val alias = "streamcam_server"
+            val alias = "streamcam_server_v2"
             if (!androidKeyStore.containsAlias(alias)) {
                 KeyPairGenerator.getInstance("RSA", "AndroidKeyStore").apply {
                     initialize(
-                        KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
+                        KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_DECRYPT)
                             .setDigests(KeyProperties.DIGEST_SHA256)
                             .setCertificateSubject(X500Principal("CN=StreamCam Pro"))
                             .setCertificateSerialNumber(BigInteger.ONE)
