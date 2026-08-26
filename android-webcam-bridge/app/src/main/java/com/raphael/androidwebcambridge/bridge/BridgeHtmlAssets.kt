@@ -630,7 +630,7 @@ object BridgeHtmlAssets {
               };
 
               // ponytail: sequential AudioBufferSourceNode scheduling, ring buffer if glitches persist
-              let ac = null, nextTime = 0, pttStream = null, pttNode = null;
+              let ac = null, nextTime = 0, pttStream = null, pttNode = null, audioSendChain = Promise.resolve();
               const audioEs = new EventSource('/api/audio/out');
               audioEs.onmessage = e => {
                 if (pttNode) return; // ponytail: skip own echo while transmitting
@@ -665,12 +665,15 @@ object BridgeHtmlAssets {
                     const pcm = new Int16Array(input.length);
                     for (let i = 0; i < input.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32768 * 1.5)); // ponytail: apply gain
                     const bytes = new Uint8Array(pcm.buffer);
-                    fetch('/api/audio/in?d=' + encodeURIComponent(btoa(String.fromCharCode(...bytes)))).catch(e => console.error('audio-send', e));
+                    const packet = encodeURIComponent(btoa(String.fromCharCode(...bytes)));
+                    audioSendChain = audioSendChain
+                      .then(() => fetch('/api/audio/in?d=' + packet))
+                      .catch(e => console.error('audio-send', e));
                   };
                   src.connect(pttNode); pttNode.connect(ac.destination);
                 }).catch(e => { pttStatus.textContent = 'Mic access denied'; console.error('getUserMedia', e); });
               };
-              pttBtn.onpointerup = pttBtn.onpointerleave = () => {
+              pttBtn.onpointerup = pttBtn.onpointercancel = () => {
                 if (!pttNode) return;
                 pttNode.disconnect(); pttNode = null;
                 pttStream?.getTracks().forEach(t => t.stop()); pttStream = null;

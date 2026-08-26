@@ -168,7 +168,6 @@ class LocalBridgeServer(
                         query["d"]?.let { raw ->
                             try {
                                 val data = Base64.decode(raw, Base64.DEFAULT)
-                                broadcastAudio(data)
                                 phoneAudioCallback?.invoke(data)
                             } catch (e: Exception) {
                                 Log.w(TAG, "audio/in: ${e.message}")
