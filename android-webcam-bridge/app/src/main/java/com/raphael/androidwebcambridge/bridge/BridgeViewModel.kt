@@ -86,7 +86,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
 
     private val server =
         LocalBridgeServer(
-            sslContext = null,
+            sslContext = sslContext,
             onRemoteUpdate = ::applyRemoteUpdate,
             onConnectionStatusChanged = ::updateClientCount,
         )
@@ -479,13 +479,14 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
             val ip = findLocalIpv4Address()
             server.start()
             val proto = if (sslContext != null) "https" else "http"
+            val dashboardPort = if (sslContext != null) 8788 else 8787
             _state.update {
                 it.copy(
                     serverRunning = true,
                     statusMessage = "Server started",
                     localIpAddress = ip,
-                    dashboardUrl = "$proto://$ip:8787/dashboard",
-                    streamUrl = "$proto://$ip:8787/stream.mjpg",
+                    dashboardUrl = "$proto://$ip:$dashboardPort/dashboard",
+                    streamUrl = "http://$ip:8787/stream.mjpg",
                 )
             }
             server.updateState(_state.value)

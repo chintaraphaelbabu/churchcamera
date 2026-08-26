@@ -26,6 +26,7 @@ import javax.net.ssl.SSLContext
 
 class LocalBridgeServer(
     private val port: Int = 8787,
+    private val securePort: Int = 8788,
     sslContext: SSLContext? = null,
     private val onRemoteUpdate: (Map<String, String?>) -> Unit,
     private val onConnectionStatusChanged: (total: Int) -> Unit,
@@ -35,13 +36,15 @@ class LocalBridgeServer(
     }
 
     // ponytail: self-signed cert factory, user clicks through one-time browser warning
-    private val listenerFactory = sslContext?.serverSocketFactory ?: ServerSocketFactory.getDefault()
+    private val listenerFactory = ServerSocketFactory.getDefault()
+    private val secureListenerFactory = sslContext?.serverSocketFactory
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val latestFrame = AtomicReference(ByteArray(0))
     private val currentState = AtomicReference(BridgeState())
     private val activeClients = AtomicInteger(0)
 
     private var serverSocket: ServerSocket? = null
+    private var secureServerSocket: ServerSocket? = null
     private var serverJob: Job? = null
 
     private val audioClients = mutableListOf<BufferedOutputStream>()
@@ -88,10 +91,9 @@ class LocalBridgeServer(
             scope.launch {
                 try {
                     serverSocket = listenerFactory.createServerSocket(port) as ServerSocket
-                    while (isActive) {
-                        val socket = serverSocket?.accept() ?: break
-                        launch { handleClient(socket) }
-                    }
+                    secureServerSocket = secureListenerFactory?.createServerSocket(securePort) as? ServerSocket
+                    launch { acceptClients(serverSocket) }
+                    acceptClients(secureServerSocket)
                 } catch (error: Exception) {
                     Log.e(TAG, "server socket: ${error.message}")
                     currentState.get()?.copy(errorMessage = error.message, statusMessage = "Server failed")?.let {
@@ -103,10 +105,19 @@ class LocalBridgeServer(
 
     fun stop() {
         runCatching { serverSocket?.close() }.onFailure { Log.w(TAG, "stop: ${it.message}") }
+        runCatching { secureServerSocket?.close() }.onFailure { Log.w(TAG, "secure stop: ${it.message}") }
         serverSocket = null
+        secureServerSocket = null
         serverJob?.cancel()
         serverJob = null
         scope.cancel()
+    }
+
+    private suspend fun acceptClients(listener: ServerSocket?) {
+        while (scope.isActive && listener != null) {
+            val socket = listener.accept()
+            scope.launch { handleClient(socket) }
+        }
     }
 
     // ponytail: swallow SSL handshake failures from plain-HTTP clients hitting the SSL socket

@@ -24,7 +24,7 @@ Android phone → professional OBS camera with tally, remote control, and focus 
 - **OBS Lua auto-start script**: `obs-relay.lua` launches relay when OBS starts
 
 ### Remote Control
-- **Phone web dashboard** at `http://phone-ip:8787/dashboard`: live preview, all camera settings, relay registration
+- **Phone web dashboard** at `https://phone-ip:8788/dashboard`: live preview, all camera settings, relay registration
 - **Relay admin panel** at `http://localhost:3000`: OBS status, per-phone tally, per-phone camera controls (ISO, WB, shutter, focus, AF toggle)
 - **SSID-aware relay discovery**: caches relay host per WiFi network, auto-redirects when switching networks
 - **UDP broadcast discovery** (port 9999) for zero-config phone finding on same subnet
