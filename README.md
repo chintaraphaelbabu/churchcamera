@@ -52,6 +52,7 @@ npm start
 ```
 
 Open `http://localhost:3000` to see the admin panel.
+For the director microphone over a LAN IP, use `https://<laptop-ip>:3443` and accept the certificate warning.
 
 ### OBS
 1. Enable **obs-websocket v5** (Tools → WebSocket Server Settings, port 4455)

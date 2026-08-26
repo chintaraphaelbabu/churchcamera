@@ -157,6 +157,11 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
                 bufSize, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE,
             )
         audioTrack?.play()
+        relayManager.onRelayAudio = { data ->
+            synchronized(audioLock) {
+                audioTrack?.write(data, 0, data.size)
+            }
+        }
         server.setPhoneAudioCallback { data ->
             synchronized(audioLock) {
                 audioTrack?.write(data, 0, data.size)

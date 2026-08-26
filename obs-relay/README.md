@@ -61,6 +61,9 @@ The relay sends tally updates to all registered devices, so a second or third ph
 - `OBS_PASSWORD` - password if you configured one in OBS
 - `SOURCE_NAME` - Browser Source name in OBS
 - `ADMIN_PORT` - admin UI port, default `3000`
+- `HTTPS_PORT` - secure admin/tally port, default `3443`
+- `TLS_PFX` - PKCS12 certificate path for secure admin/tally
+- `TLS_PASSWORD` - PKCS12 password, default `changeit`
 - `RELAY_HOST` - laptop LAN IP advertised to phones, useful when multiple adapters exist
 - `POLL_ON_START` - set to `false` to skip the first tally scan
 

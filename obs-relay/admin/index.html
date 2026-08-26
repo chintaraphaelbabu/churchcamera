@@ -30,11 +30,16 @@
   .small{font-size:11px;color:#64748b;margin-top:4px;word-break:break-all}
   .empty{text-align:center;padding:60px 16px;color:#94a3b8;width:100%}
   .empty h2{font-size:18px;margin:0 0 8px;color:#64748b}
+  .director{display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid rgba(255,255,255,.08)}
+  .director-mic{width:220px;height:72px;border:0;border-radius:12px;background:#ef4444;color:#fff;font-size:20px;font-weight:800;cursor:pointer;box-shadow:0 8px 24px #ef444455;user-select:none;touch-action:none}
+  .director-mic.active{background:#22c55e;box-shadow:0 8px 24px #22c55e55}
+  .director-status{color:#94a3b8;font-size:13px}
 
 </style>
 </head>
 <body>
 <div class="header"><span class="obs-dot" id="obsDot"></span><h1 id="obsLabel">Connecting...</h1><span style="font-size:13px;color:#64748b" id="countLabel"></span><span style="font-size:12px;color:#94a3b8;margin-left:auto" id="relayLabel"></span></div>
+<div class="director"><button class="director-mic" id="directorMic">Hold to speak to all phones</button><span class="director-status" id="directorStatus">Ready</span></div>
 <div class="grid" id="grid"></div>
 <script>
 // ponytail: single-file status panel, SSE primary + setInterval fallback, zero deps
@@ -63,6 +68,33 @@ function render(data){
 }
 
 function fetchData(){fetch('/api/diagnostics').then(r=>r.json()).then(render).catch(()=>{})}
+const directorMic=document.getElementById('directorMic'),directorStatus=document.getElementById('directorStatus');
+let directorAudio=null,directorStream=null,directorNode=null,directorSending=Promise.resolve();
+function stopDirectorMic(){
+  directorNode?.disconnect(); directorNode=null;
+  directorStream?.getTracks().forEach(t=>t.stop()); directorStream=null;
+  directorMic.classList.remove('active'); directorMic.textContent='Hold to speak to all phones'; directorStatus.textContent='Ready';
+}
+directorMic.onpointerdown=async (event)=>{
+  event.preventDefault();
+  if(directorNode)return;
+  try{
+    directorAudio=directorAudio||new AudioContext({sampleRate:44100});
+    await directorAudio.resume();
+    directorStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    directorMic.classList.add('active'); directorMic.textContent='Speaking to all phones'; directorStatus.textContent='Release to stop';
+    const source=directorAudio.createMediaStreamSource(directorStream);
+    directorNode=directorAudio.createScriptProcessor(2048,1,1);
+    directorNode.onaudioprocess=(event)=>{
+      const input=event.inputBuffer.getChannelData(0),pcm=new Int16Array(input.length);
+      for(let i=0;i<input.length;i++)pcm[i]=Math.max(-32768,Math.min(32767,input[i]*32768*1.5));
+      const data=btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
+      directorSending=directorSending.then(()=>fetch('/api/audio/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data})})).catch(()=>{});
+    };
+    source.connect(directorNode); directorNode.connect(directorAudio.destination);
+  }catch(error){directorStatus.textContent='Microphone unavailable';console.error('director-mic',error)}
+};
+directorMic.onpointerup=directorMic.onpointercancel=stopDirectorMic;
 // ponytail: SSE primary, 10s poll fallback — never stale, no reconnect logic
 const es=new EventSource('/events');
 es.addEventListener('state',e=>{try{render(JSON.parse(e.data))}catch(_){}});

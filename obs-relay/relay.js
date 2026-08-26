@@ -2,6 +2,8 @@ const { OBSWebSocket } = require('obs-websocket-js');
 const http = require('http');
 const https = require('https');
 const WebSocket = require('ws');
+const fs = require('fs');
+const path = require('path');
 
 const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://localhost:4455';
 const OBS_PASSWORD = process.env.OBS_PASSWORD || '';
@@ -12,10 +14,11 @@ const DEVICE_GC_AGE_MS = Number(process.env.DEVICE_GC_AGE_MS || 300000); // 5min
 
 const ADMIN_PORT = process.env.ADMIN_PORT || 3000;
 const RELAY_HOST = process.env.RELAY_HOST || '';
+const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+const TLS_PFX = process.env.TLS_PFX || path.join(__dirname, 'certs', 'relay.p12');
+const TLS_PASSWORD = process.env.TLS_PASSWORD || 'changeit';
 
 // devices store
-const fs = require('fs');
-const path = require('path');
 const DEVICES_FILE = path.join(__dirname, 'devices.json');
 let devices = {};
 function loadDevices(){
@@ -432,6 +435,18 @@ function startAdmin(){
       res.status(500).json({ error: error?.message || 'diagnostics unavailable' });
     }
   });
+  app.post('/api/audio/broadcast', (req, res) => {
+    const data = typeof req.body?.data === 'string' ? req.body.data : '';
+    if (!data) return res.status(400).json({ error: 'audio data required' });
+    let sent = 0;
+    for (const ws of phoneSockets.values()) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'audio', data }));
+        sent++;
+      }
+    }
+    res.json({ ok: true, sent });
+  });
 
   // ponytail: proxy MJPG from phone over plain HTTP — OBS Browser Source rejects self-signed HTTPS
   app.get('/api/stream/:id', async (req, res) => {
@@ -458,10 +473,9 @@ function startAdmin(){
     } catch (e) { console.warn('stream proxy error', e?.message); res.status(502).end(); }
   });
 
-  const server = http.createServer(app);
-  const wss = new WebSocket.Server({ server });
-
-  wss.on('connection', (ws) => {
+  const attachWebSocket = (server) => {
+    const wss = new WebSocket.Server({ server });
+    wss.on('connection', (ws) => {
     let deviceId = null;
     ws._lastPong = Date.now();
     ws.on('pong', () => { ws._lastPong = Date.now(); });
@@ -479,9 +493,20 @@ function startAdmin(){
       if (deviceId) { phoneSockets.delete(deviceId); console.log('Tally WebSocket disconnected:', deviceId); }
     });
     ws.on('error', (e) => { console.warn('Tally WS error', e?.message); });
-  });
+    });
+  };
+
+  const server = http.createServer(app);
+  attachWebSocket(server);
 
   server.listen(ADMIN_PORT, () => console.log('Admin UI + WebSocket on http://localhost:'+ADMIN_PORT));
+  if (fs.existsSync(TLS_PFX)) {
+    const secureServer = https.createServer({ pfx: fs.readFileSync(TLS_PFX), passphrase: TLS_PASSWORD }, app);
+    attachWebSocket(secureServer);
+    secureServer.listen(HTTPS_PORT, () => console.log('Secure admin UI + WebSocket on https://localhost:'+HTTPS_PORT));
+  } else {
+    console.warn('HTTPS disabled; TLS certificate not found at', TLS_PFX);
+  }
   void publishAdminState('startup');
 }
 

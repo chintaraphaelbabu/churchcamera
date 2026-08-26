@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
+import android.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,6 +28,7 @@ class RelayManager(
     private val onDiscoveryStatus: (String) -> Unit = {},
 ) {
     var onTallyUpdate: ((TallyState) -> Unit)? = null
+    var onRelayAudio: ((ByteArray) -> Unit)? = null
 
     private val prefs: SharedPreferences = context.getSharedPreferences("bridge_prefs", Context.MODE_PRIVATE)
     private var relayHeartbeatJob: Job? = null
@@ -167,6 +169,9 @@ class RelayManager(
                                 val tallyStr = json.optString("tallyState")
                                 val tally = runCatching { TallyState.valueOf(tallyStr) }.getOrDefault(TallyState.IDLE)
                                 onTallyUpdate?.invoke(tally)
+                            } else if (json.optString("type") == "audio") {
+                                val audio = Base64.decode(json.optString("data"), Base64.DEFAULT)
+                                onRelayAudio?.invoke(audio)
                             }
                         } catch (e: Exception) {
                             android.util.Log.w("RelayMgr", "tally WS onMessage: ${e.message}")
