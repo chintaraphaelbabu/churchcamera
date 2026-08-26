@@ -11,6 +11,7 @@ const DEVICE_STALE_MS = Number(process.env.DEVICE_STALE_MS || 10000);
 const DEVICE_GC_AGE_MS = Number(process.env.DEVICE_GC_AGE_MS || 300000); // 5min, remove if no ping
 
 const ADMIN_PORT = process.env.ADMIN_PORT || 3000;
+const RELAY_HOST = process.env.RELAY_HOST || '';
 
 // devices store
 const fs = require('fs');
@@ -436,11 +437,14 @@ function startAdmin(){
   app.get('/api/stream/:id', async (req, res) => {
     const device = devices[req.params.id];
     if (!device || !device.url) return res.status(404).end();
-    const streamUrl = device.url.replace('http://', 'https://').replace(/\/+$/, '') + '/stream.mjpg';
+    const streamUrl = device.url.replace(/\/+$/, '') + '/stream.mjpg';
     let proxyRes = null;
     try {
       proxyRes = await new Promise((resolve, reject) => {
-        https.get(streamUrl, { rejectUnauthorized: false }, resolve).on('error', reject);
+        const request = streamUrl.startsWith('https://')
+          ? https.get(streamUrl, { rejectUnauthorized: false }, resolve)
+          : http.get(streamUrl, resolve);
+        request.on('error', reject);
       });
       res.writeHead(200, {
         'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
@@ -509,6 +513,7 @@ const os = require('os');
 const udpSocket = dgram.createSocket('udp4');
 const BROADCAST_PORT = 9999;
 function getLanIp() {
+  if (RELAY_HOST.trim()) return RELAY_HOST.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
   for (const iface of Object.values(os.networkInterfaces())) {
     if (!iface) continue;
     for (const addr of iface) {

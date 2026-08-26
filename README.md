@@ -47,6 +47,7 @@ cd android-webcam-bridge
 ```powershell
 cd obs-relay
 npm install
+$env:RELAY_HOST = "192.168.1.11"  # laptop Wi-Fi address
 npm start
 ```
 
