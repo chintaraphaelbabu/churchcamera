@@ -224,7 +224,7 @@ function normalizeObsUrl(address) {
 function pushTallyViaWs(device, state) {
   const ws = phoneSockets.get(device.id);
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'tally', tallyState: state, sourceName: device.sourceName }));
+    ws.send(JSON.stringify({ type: 'tally', tallyState: state, sourceName: getDeviceSourceName(device) }));
   }
 }
 
@@ -269,7 +269,7 @@ async function evaluateTally() {
 
     const programItems = programScene ? await getSceneItems(programScene) : [];
     const previewItems = previewScene ? await getSceneItems(previewScene) : [];
-    const deviceList = Object.values(devices).filter((device) => device && device.url && isDeviceFresh(device));
+    const deviceList = Object.values(devices).filter((device) => device && isDeviceFresh(device));
 
     deviceList.forEach((device) => {
       const sourceName = getDeviceSourceName(device);
@@ -448,31 +448,6 @@ function startAdmin(){
     res.json({ ok: true, sent });
   });
 
-  // ponytail: proxy MJPG from phone over plain HTTP — OBS Browser Source rejects self-signed HTTPS
-  app.get('/api/stream/:id', async (req, res) => {
-    const device = devices[req.params.id];
-    if (!device || !device.url) return res.status(404).end();
-    const streamUrl = device.url.replace(/\/+$/, '') + '/stream.mjpg';
-    let proxyRes = null;
-    try {
-      proxyRes = await new Promise((resolve, reject) => {
-        const request = streamUrl.startsWith('https://')
-          ? https.get(streamUrl, { rejectUnauthorized: false }, resolve)
-          : http.get(streamUrl, resolve);
-        request.on('error', reject);
-      });
-      res.writeHead(200, {
-        'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
-        'Cache-Control': 'no-cache',
-      });
-      proxyRes.pipe(res);
-      // ponytail: destroy phone connection when OBS disconnects — leak turned into stale connections
-      res.on('close', () => { proxyRes?.destroy(); proxyRes = null; });
-      res.on('error', () => { proxyRes?.destroy(); proxyRes = null; });
-      proxyRes.on('error', () => { res.destroy(); proxyRes = null; });
-    } catch (e) { console.warn('stream proxy error', e?.message); res.status(502).end(); }
-  });
-
   const attachWebSocket = (server) => {
     const wss = new WebSocket.Server({ server });
     wss.on('connection', (ws) => {
@@ -495,12 +470,10 @@ function startAdmin(){
             batteryLevel: msg.batteryLevel !== undefined ? msg.batteryLevel : -1,
             rtt: msg.rtt !== undefined ? msg.rtt : undefined,
           };
-          if (payload.url) {
-            const device = upsertDevice(payload);
-            console.log('AUTO-REGISTER via auth:', { id: device.id, name: device.name, url: device.url });
-            void evaluateTally();
-            void publishAdminState('auth-register');
-          }
+          const device = upsertDevice(payload);
+          console.log('AUTO-REGISTER via auth:', { id: device.id, name: device.name, url: device.url || '(none)' });
+          void evaluateTally();
+          void publishAdminState('auth-register');
         }
       } catch (e) { console.warn('WS message parse error', e?.message); }
     });

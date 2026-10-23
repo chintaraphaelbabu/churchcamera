@@ -56,8 +56,8 @@ For the director microphone over a LAN IP, use `https://<laptop-ip>:3443` and ac
 
 ### OBS
 1. Enable **obs-websocket v5** (Tools → WebSocket Server Settings, port 4455)
-2. Add a **Browser Source** → URL: `http://phone-ip:8787/stream.mjpg`
-3. For tally: point each phone at `http://relay-ip:3000` in the app's relay field, then tap Register
+2. Add a **Browser Source** → URL: `https://<phone-ip>:8787/stream.mjpg` (direct to phone, no relay proxy)
+3. For tally: point each phone at `http://relay-ip:3000` in the app's relay field, then tap Register (or rely on auto-register via WebSocket auth)
 
 ### Optional: auto-start relay with OBS
 In OBS → Tools → Scripts → Add Scripts → select `obs-relay/obs-relay.lua`. Uses `script_path()` — no hardcoded paths.
