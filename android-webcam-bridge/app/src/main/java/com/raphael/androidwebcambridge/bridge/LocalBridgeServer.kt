@@ -188,11 +188,12 @@ class LocalBridgeServer(
                             synchronized(audioClients) { audioClients.remove(output) }
                         }
                     }
-                    uri == "/stream.mjpg" || uri.startsWith("/stream") -> writeMjpeg(client, output)
+                    uri == "/stream.mjpg" || (uri.startsWith("/stream") && !uri.endsWith(".ws")) -> writeMjpeg(client, output)
+                    uri == "/stream.ws" -> handleWebSocketStream(client, output, socket)
                     else -> writeText(output, "Not found", "text/plain; charset=utf-8", code = 404)
                 }
                 // ponytail: graceful shutdown — FIN + delay so peer reads response before close() sends RST
-                if (uri != "/stream.mjpg" && !uri.startsWith("/stream") && uri != "/api/audio/out") {
+                if (uri != "/stream.mjpg" && !uri.startsWith("/stream") && uri != "/stream.ws" && uri != "/api/audio/out") {
                     runCatching { client.shutdownOutput() }
                     delay(10)
                 }
@@ -285,5 +286,62 @@ class LocalBridgeServer(
                 key to value
             }
             .toMap()
+    }
+
+    private suspend fun handleWebSocketStream(
+        socket: Socket,
+        output: BufferedOutputStream,
+        client: Socket,
+    ) {
+        try {
+            val handshakeResponse = (
+                    "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Sec-WebSocket-Accept: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+                    "\r\n"
+                )
+            output.write(handshakeResponse.toByteArray(StandardCharsets.UTF_8))
+            output.flush()
+
+            onConnectionStatusChanged(activeClients.incrementAndGet())
+            try {
+                val inputStream = client.getInputStream()
+                while (socket.isConnected && !socket.isClosed && scope.isActive) {
+                    val frame = latestFrame.get()
+                    if (frame.isNotEmpty()) {
+                        val payload = frame
+                        val len = payload.size
+                        val header = ByteArray(2 + if (len < 126) 1 else 2)
+                        header[0] = 0x82.toByte()
+                        if (len < 126) {
+                            header[1] = len.toByte()
+                            output.write(header, 0, 2)
+                        } else {
+                            header[1] = 126.toByte()
+                            val extLen = ByteArray(2)
+                            extLen[0] = (len shr 8 and 0xFF).toByte()
+                            extLen[1] = (len and 0xFF).toByte()
+                            output.write(header, 0, 2)
+                            output.write(extLen)
+                        }
+                        output.write(payload)
+                        output.flush()
+                    } else {
+                        delay(100L)
+                    }
+                    if (inputStream.available() > 0) {
+                        val discard = ByteArray(minOf(1024, inputStream.available()))
+                        inputStream.read(discard)
+                    } else {
+                        delay(16L)
+                    }
+                }
+            } finally {
+                onConnectionStatusChanged(activeClients.decrementAndGet())
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "websocket stream: ${e.message}")
+        }
     }
 }

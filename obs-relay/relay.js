@@ -485,7 +485,22 @@ function startAdmin(){
         if (msg.type === 'auth' && msg.deviceId) {
           deviceId = msg.deviceId;
           phoneSockets.set(deviceId, ws);
-          console.log('Tally WebSocket connected:', deviceId);
+          console.log('Tally WebSocket auth:', deviceId);
+          // ponytail: auto-register on auth — eliminates separate POST /api/register
+          const payload = {
+            id: msg.deviceId,
+            name: msg.name || msg.deviceName || '',
+            sourceName: msg.sourceName || '',
+            url: msg.url || msg.deviceUrl || '',
+            batteryLevel: msg.batteryLevel !== undefined ? msg.batteryLevel : -1,
+            rtt: msg.rtt !== undefined ? msg.rtt : undefined,
+          };
+          if (payload.url) {
+            const device = upsertDevice(payload);
+            console.log('AUTO-REGISTER via auth:', { id: device.id, name: device.name, url: device.url });
+            void evaluateTally();
+            void publishAdminState('auth-register');
+          }
         }
       } catch (e) { console.warn('WS message parse error', e?.message); }
     });
@@ -556,6 +571,27 @@ setInterval(() => {
   udpSocket.send(buf, 0, buf.length, BROADCAST_PORT, '255.255.255.255');
 }, 2000);
 console.log(`UDP broadcast on port ${BROADCAST_PORT}: ${discoveryPayload}`);
+
+// ponytail: basic mDNS advertisement for _churchcam._tcp (manual multicast, no extra deps)
+const mdnsPort = 5353;
+const mdnsMulticast = '224.0.0.251';
+try {
+  const mdnsSocket = dgram.createSocket('udp4');
+  mdnsSocket.on('error', (e) => console.warn('mDNS socket error', e.message));
+  mdnsSocket.bind(() => {
+    mdnsSocket.setBroadcast(true);
+    mdnsSocket.addMembership(mdnsMulticast);
+    setInterval(() => {
+      const ptrRecord = Buffer.from(`_churchcam._tcp.local. PTR churchcam._tcp.local.`);
+      mdnsSocket.send(ptrRecord, 0, ptrRecord.length, mdnsPort, mdnsMulticast, (err) => {
+        if (err) console.warn('mDNS send error', err.message);
+      });
+    }, 2000);
+    console.log(`mDNS advertisement on ${mdnsMulticast}:${mdnsPort}: _churchcam._tcp`);
+  });
+} catch (e) {
+  console.warn('mDNS advertisement failed:', e.message);
+}
 
 // ponytail: top-level error boundary — log, don't crash
 process.on('uncaughtException', (e) => console.error('[FATAL]', e));

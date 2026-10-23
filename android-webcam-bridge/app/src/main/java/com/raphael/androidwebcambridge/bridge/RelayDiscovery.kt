@@ -13,36 +13,45 @@ class RelayDiscovery(private val onRelayFound: (String) -> Unit) {
 
     fun start() {
         if (thread?.isAlive == true) return
-        thread =
-            Thread {
-                try {
-                    socket =
-                        DatagramSocket(BROADCAST_PORT, InetAddress.getByName("0.0.0.0")).apply {
-                            soTimeout = 0
-                        }
-                    val buf = ByteArray(256)
-                    while (!Thread.currentThread().isInterrupted) {
-                        val packet = DatagramPacket(buf, buf.size)
-                        socket?.receive(packet)
-                        val msg = String(packet.data, 0, packet.length)
-                        try {
-                            val json = JSONObject(msg)
-                            val url = json.getString("url")
-                            Log.d(TAG, "relay found: $url")
-                            onRelayFound(url)
-                            return@Thread
-                        } catch (_: Exception) {
-                        }
-                    }
-                } catch (e: Exception) {
-                    if (!Thread.currentThread().isInterrupted) {
-                        Log.w(TAG, "broadcast listener error: ${e.message}")
+        thread = Thread {
+            try {
+                // ponytail: scan for .local. relay URLs (mDNS-style) in addition to UDP broadcast
+                val scanHostnames = listOf("churchcam.local", "relay.local", "obs-relay.local")
+                for (host in scanHostnames) {
+                    try {
+                        val addr = InetAddress.getByName(host)
+                        Log.d(TAG, ".local. scan found host: $host -> ${addr.hostAddress}")
+                        onRelayFound("http://${addr.hostAddress}:3000")
+                        return@Thread
+                    } catch (_: Exception) {
+                        // hostname not resolved; continue scanning
                     }
                 }
-            }.apply {
-                isDaemon = true
-                start()
+
+                socket = DatagramSocket(BROADCAST_PORT, InetAddress.getByName("0.0.0.0")).apply { soTimeout = 0 }
+                val buf = ByteArray(256)
+                while (!Thread.currentThread().isInterrupted) {
+                    val packet = DatagramPacket(buf, buf.size)
+                    socket?.receive(packet)
+                    val msg = String(packet.data, 0, packet.length)
+                    try {
+                        val json = JSONObject(msg)
+                        val url = json.getString("url")
+                        Log.d(TAG, "relay found: $url")
+                        onRelayFound(url)
+                        return@Thread
+                    } catch (_: Exception) {
+                    }
+                }
+            } catch (e: Exception) {
+                if (!Thread.currentThread().isInterrupted) {
+                    Log.w(TAG, "broadcast listener error: ${e.message}")
+                }
             }
+        }.apply {
+            isDaemon = true
+            start()
+        }
     }
 
     fun stop() {
