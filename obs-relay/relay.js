@@ -56,10 +56,27 @@ function upsertDevice(payload) {
     if (Number.isFinite(rtt) && rtt > 0) latencyMs = Math.round(rtt / 2);
   }
 
+  // Phones heartbeat with their Android model as sourceName. Never let that
+  // clobber a name the relay auto-matched to an OBS browser source.
+  const incomingIsDefault = !incomingSourceName
+    || (incomingName && incomingSourceName === incomingName)
+    || incomingSourceName === SOURCE_NAME;
+
+  let sourceName;
+  let sourceNameAuto;
+  if (previous.sourceNameAuto && incomingIsDefault) {
+    sourceName = previous.sourceName;
+    sourceNameAuto = true;
+  } else {
+    sourceName = incomingSourceName || previous.sourceName || '';
+    sourceNameAuto = false;
+  }
+
   devices[recordId] = {
     id: recordId,
     name: incomingName || previous.name || '',
-    sourceName: incomingSourceName || previous.sourceName || '',
+    sourceName,
+    sourceNameAuto,
     url: incomingUrl || previous.url || '',
     lastSeen: now,
     latencyMs,
@@ -74,6 +91,29 @@ function getDeviceSourceName(device) {
   return SOURCE_NAME;
 }
 
+// A source name is "default" until a human (or auto-match) gives it a real
+// OBS input name. Phones send their Android model on every heartbeat.
+function isDefaultSourceName(device, sourceName) {
+  const value = sourceName !== undefined
+    ? (sourceName ? String(sourceName).trim() : '')
+    : (device && device.sourceName ? String(device.sourceName).trim() : '');
+  if (!value) return true;
+  if (value === SOURCE_NAME) return true;
+  const deviceName = device && device.name ? String(device.name).trim() : '';
+  if (deviceName && value === deviceName) return true;
+  return false;
+}
+
+// Extract the hostname used to identify which browser source shows a phone.
+function hostFromUrl(rawUrl) {
+  if (!rawUrl) return '';
+  try {
+    return new URL(String(rawUrl)).hostname.toLowerCase();
+  } catch (_) {
+    return '';
+  }
+}
+
 function getDeviceAgeMs(device) {
   const lastSeen = Number(device && device.lastSeen);
   if (!Number.isFinite(lastSeen) || lastSeen <= 0) return null;
@@ -85,6 +125,7 @@ function serializeDevice(device) {
     id: device.id,
     name: device.name,
     sourceName: device.sourceName,
+    sourceNameAuto: !!device.sourceNameAuto,
     url: device.url,
     lastSeen: device.lastSeen,
     latencyMs: device.latencyMs || null,
@@ -127,6 +168,9 @@ async function collectDiagnostics() {
         id: device.id,
         name: device.name,
         sourceName,
+        sourceNameAuto: !!device.sourceNameAuto,
+        autoMatched: !!device.sourceNameAuto,
+        sourceDefault: isDefaultSourceName(device),
         url: device.url,
         lastSeen: device.lastSeen,
         latencyMs: device.latencyMs || null,
@@ -155,7 +199,7 @@ async function collectDiagnostics() {
   if (staleDevices.length > 0) {
     issues.push(`${staleDevices.length} phone(s) have not pinged recently.`);
   }
-  const missingSourceNames = deviceList.filter((device) => !device.sourceName || device.sourceName === SOURCE_NAME);
+  const missingSourceNames = deviceList.filter((device) => device.sourceDefault);
   if (missingSourceNames.length > 0) {
     issues.push('One or more phones are still using the default source name.');
   }
@@ -259,6 +303,62 @@ async function getSceneItemsCached(sceneName) {
   return items;
 }
 
+// ponytail: map browser-source hostname -> inputName. 5s TTL is only a safety
+// net; OBS input events invalidate it immediately.
+const BROWSER_SOURCE_CACHE_TTL_MS = 5000;
+let browserSourceHostsCache = null; // { hosts: Map<host, inputName>, at }
+let browserSourceHostsInFlight = null; // { generation, promise }
+let browserSourceCacheGeneration = 0;
+
+function clearBrowserSourceCache() {
+  browserSourceCacheGeneration++;
+  browserSourceHostsCache = null;
+  browserSourceHostsInFlight = null;
+}
+
+async function getBrowserSourceHosts() {
+  const cached = browserSourceHostsCache;
+  if (cached && Date.now() - cached.at < BROWSER_SOURCE_CACHE_TTL_MS) return cached.hosts;
+  if (browserSourceHostsInFlight) return browserSourceHostsInFlight.promise;
+
+  const generation = browserSourceCacheGeneration;
+  const promise = (async () => {
+    const hosts = new Map();
+    let ok = true;
+    try {
+      const list = await obs.call('GetInputList', { inputKind: 'browser_source' });
+      for (const input of (list && list.inputs) || []) {
+        const inputName = input && input.inputName;
+        if (!inputName) continue;
+        try {
+          const settings = await obs.call('GetInputSettings', { inputName });
+          const host = hostFromUrl(settings && settings.inputSettings && settings.inputSettings.url);
+          if (host && !hosts.has(host)) hosts.set(host, inputName); // first input wins per host
+        } catch (err) {
+          console.warn('GetInputSettings failed for', inputName, err.message || err);
+        }
+      }
+    } catch (err) {
+      ok = false;
+      console.warn('GetInputList failed', err.message || err);
+    }
+    // Only cache successful reads, and only if the cache was not cleared while
+    // we were talking to OBS (avoids resurrecting pre-invalidation data).
+    if (ok && generation === browserSourceCacheGeneration) {
+      browserSourceHostsCache = { hosts, at: Date.now() };
+    }
+    return hosts;
+  })();
+
+  const entry = { generation, promise };
+  browserSourceHostsInFlight = entry;
+  try {
+    return await promise;
+  } finally {
+    if (browserSourceHostsInFlight === entry) browserSourceHostsInFlight = null;
+  }
+}
+
 async function getProgramSceneName() {
   try {
     const resp = await obs.call('GetCurrentProgramScene');
@@ -320,6 +420,73 @@ async function evaluateTally() {
   }
 }
 
+// ponytail: serialize auto-match, 500ms debounce — register/ping bursts should
+// not spam OBS with GetInputList/GetInputSettings. Tally itself stays undebounced.
+const AUTO_MATCH_DEBOUNCE_MS = 500;
+let autoMatchTimer = null;
+let autoMatchInFlight = false;
+let autoMatchQueued = false;
+
+function scheduleAutoMatch() {
+  if (autoMatchTimer) clearTimeout(autoMatchTimer);
+  autoMatchTimer = setTimeout(() => {
+    autoMatchTimer = null;
+    void autoMatchDeviceSources();
+  }, AUTO_MATCH_DEBOUNCE_MS);
+}
+
+async function autoMatchDeviceSources() {
+  if (!connected) return;
+  if (autoMatchInFlight) {
+    autoMatchQueued = true;
+    return;
+  }
+  autoMatchInFlight = true;
+  let changed = false;
+  try {
+    const hosts = await getBrowserSourceHosts();
+    for (const device of Object.values(devices)) {
+      if (!device || !device.url) continue;
+      const sourceIsDefault = isDefaultSourceName(device);
+      // Explicit source names (not default, not auto-matched) are never touched.
+      if (!sourceIsDefault && !device.sourceNameAuto) continue;
+
+      const host = hostFromUrl(device.url);
+      const match = host ? hosts.get(host) : undefined;
+      if (match) {
+        if (device.sourceName !== match || !device.sourceNameAuto) {
+          device.sourceName = match;
+          device.sourceNameAuto = true;
+          changed = true;
+        }
+      } else if (sourceIsDefault) {
+        // No browser source for this phone. Keep the default name so the admin
+        // UI can show a hint, but an old auto flag is no longer valid.
+        if (device.sourceNameAuto) {
+          device.sourceNameAuto = false;
+          changed = true;
+        }
+      }
+      // Auto-matched name with no match right now: keep it. A transient OBS
+      // read failure must not wipe a working match.
+    }
+  } catch (error) {
+    console.warn('autoMatchDeviceSources error', error.message || error);
+  } finally {
+    autoMatchInFlight = false;
+    if (changed) {
+      saveDevices();
+      console.log('AUTO-MATCH updated device source names');
+      void publishAdminState('auto-match');
+      void evaluateTally();
+    }
+    if (autoMatchQueued) {
+      autoMatchQueued = false;
+      scheduleAutoMatch();
+    }
+  }
+}
+
 async function connectOnce() {
   const url = normalizeObsUrl(OBS_ADDRESS);
   console.log('Connecting to OBS at', url);
@@ -327,6 +494,8 @@ async function connectOnce() {
   console.log('Connected to OBS:', result);
   connected = true;
   clearSceneItemCache(); // ponytail: never reuse items from a previous OBS session
+  clearBrowserSourceCache(); // fresh input list after every (re)connect
+  await autoMatchDeviceSources();
 
   if (POLL_ON_START) {
     programScene = await getProgramSceneName();
@@ -376,10 +545,27 @@ function installEventHandlers() {
     await evaluateTally();
   });
 
+  // Browser source list/URLs changed — drop the host cache. A new or renamed
+  // input may also be the one a waiting phone should auto-match to.
+  obs.on('InputCreated', () => {
+    clearBrowserSourceCache();
+    scheduleAutoMatch();
+  });
+
+  obs.on('InputRemoved', () => {
+    clearBrowserSourceCache();
+  });
+
+  obs.on('InputNameChanged', () => {
+    clearBrowserSourceCache();
+    scheduleAutoMatch();
+  });
+
   obs.on('ConnectionClosed', (data) => {
     console.log('OBS connection closed', data);
     connected = false;
     clearSceneItemCache();
+    clearBrowserSourceCache();
     void publishAdminState('disconnected');
   });
   obs.on('AuthenticationFailure', (err) => console.warn('OBS auth failure', err));
@@ -465,6 +651,7 @@ function startAdmin(){
     if(!url) return res.status(400).json({error:'url required'});
     const device = upsertDevice({ id, name, sourceName, url, batteryLevel, rtt });
     console.log('REGISTER', { id: device.id, name: device.name, sourceName: device.sourceName, url: device.url });
+    scheduleAutoMatch();
     void evaluateTally();
     void publishAdminState('register');
     res.json({ok:true,id:device.id});
@@ -474,6 +661,7 @@ function startAdmin(){
     if(!url) return res.status(400).json({error:'url required'});
     const device = upsertDevice({ id, name, sourceName, url, batteryLevel, rtt });
     console.log('PING', { id: device.id, name: device.name, sourceName: device.sourceName, url: device.url });
+    scheduleAutoMatch();
     void evaluateTally();
     void publishAdminState('ping');
     res.json({ok:true,id:device.id,lastSeen:device.lastSeen});
@@ -526,6 +714,7 @@ function startAdmin(){
           };
           const device = upsertDevice(payload);
           console.log('AUTO-REGISTER via auth:', { id: device.id, name: device.name, url: device.url || '(none)' });
+          scheduleAutoMatch();
           void evaluateTally();
           void publishAdminState('auth-register');
         }

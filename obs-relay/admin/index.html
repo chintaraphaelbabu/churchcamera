@@ -28,6 +28,8 @@
   .status.IDLE{color:#4ade80}
   .status.offline{color:#94a3b8}
   .small{font-size:11px;color:#64748b;margin-top:4px;word-break:break-all}
+  .small.hint{color:#fbbf24}
+  .auto-badge{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:999px;border:1px solid rgba(56,189,248,.5);background:rgba(56,189,248,.12);color:#7dd3fc;font-size:9px;font-weight:700;letter-spacing:.06em;vertical-align:middle}
   .empty{text-align:center;padding:60px 16px;color:#94a3b8;width:100%}
   .empty h2{font-size:18px;margin:0 0 8px;color:#64748b}
   .director{display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid rgba(255,255,255,.08)}
@@ -64,7 +66,10 @@ function render(data){
     const streamLink=streamUrl?'<a href="'+streamUrl+'/stream.mjpg" target="_blank" rel="noopener">stream.mjpg</a>':(d.name||d.sourceName||'');
     const lat=d.latencyMs; const latStr=lat!=null?(lat<1?'<1ms':lat<10?lat+'ms':Math.round(lat)+'ms'):'?';
     const bat=d.batteryLevel>=0?d.batteryLevel+'%':'';
-    return '<div class="card'+(fresh?'':' stale')+'"><div class="dot '+dotClass+'"></div><div class="info"><div class="name">'+(d.sourceName||'?')+'</div><div class="status '+dotClass+'">'+label+'</div><div class="small">'+(streamLink?streamLink+' · ':'')+latStr+(bat?' · '+bat:'')+'</div></div></div>'
+    const autoBadge=d.sourceNameAuto?'<span class="auto-badge">AUTO</span>':'';
+    const needsSource=fresh&&(d.sourceDefault===true||(!d.sourceNameAuto&&(!d.sourceName||d.sourceName===d.name)));
+    const detail=needsSource?'set source name in phone dashboard':(streamLink?streamLink+' · ':'')+latStr+(bat?' · '+bat:'');
+    return '<div class="card'+(fresh?'':' stale')+'"><div class="dot '+dotClass+'"></div><div class="info"><div class="name">'+(d.sourceName||'?')+autoBadge+'</div><div class="status '+dotClass+'">'+label+'</div><div class="small'+(needsSource?' hint':'')+'">'+detail+'</div></div></div>'
   }).join('');
 }
 
