@@ -46,6 +46,9 @@ class CameraSessionController(context: Context) {
     private val cameraProviderFuture = ProcessCameraProvider.getInstance(appContext)
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
+    // ponytail: detection runs off the analysis thread so a slow ML Kit call never stalls frames
+    private val faceDetectionExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+
     private val detector =
         FaceDetection.getClient(
             FaceDetectorOptions.Builder()
@@ -80,6 +83,9 @@ class CameraSessionController(context: Context) {
 
     @Volatile
     private var faceDetectCounter = 0
+
+    @Volatile
+    private var faceDetectionInFlight = false
 
     fun bind(
         previewView: PreviewView,
@@ -202,21 +208,70 @@ class CameraSessionController(context: Context) {
         onFrame: (ByteArray) -> Unit,
         onFacesDetected: (List<DetectedFace>) -> Unit,
     ) {
-        val mediaImage = imageProxy.image
-        if (mediaImage != null && activeCamera) {
-            // ponytail: throttle face detection to ~12fps, saves battery at 60fps
-            if (++faceDetectCounter % 5 == 0) {
-                val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                detector.process(inputImage)
-                    .addOnSuccessListener { faces ->
-                        if (activeCamera) {
+        val shouldDetect = imageProxy.image != null && activeCamera
+        val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+        // ponytail: encode + close first; detection then works on the JPEG without holding the proxy
+        val frame = finishFrame(imageProxy, onFrame)
+        if (!shouldDetect || frame == null) return
+        // ponytail: throttle face detection to ~12fps, saves battery at 60fps
+        if (++faceDetectCounter % 5 != 0) return
+        submitFaceDetection(frame, rotationDegrees, onFacesDetected)
+    }
+
+    private fun finishFrame(
+        imageProxy: ImageProxy,
+        onFrame: (ByteArray) -> Unit,
+    ): EncodedFrame? {
+        val frame =
+            try {
+                if (focusPeakingEnabled) {
+                    focusPeakingBitmap = computeFocusPeaking(imageProxy)
+                }
+                imageProxy.toCroppedJpeg(activeSettings)
+            } catch (e: Exception) {
+                Log.w(TAG, "finishFrame: ${e.message}")
+                null
+            } finally {
+                imageProxy.close()
+            }
+
+        if (frame != null) {
+            try {
+                onFrame(frame.bytes)
+            } catch (e: Exception) {
+                Log.w(TAG, "onFrame: ${e.message}")
+            }
+        }
+        return frame
+    }
+
+    private fun submitFaceDetection(
+        frame: EncodedFrame,
+        rotationDegrees: Int,
+        onFacesDetected: (List<DetectedFace>) -> Unit,
+    ) {
+        // ponytail: skip instead of queueing when ML Kit is still busy with the previous frame
+        if (faceDetectionInFlight) return
+        faceDetectionInFlight = true
+        try {
+            faceDetectionExecutor.execute {
+                try {
+                    // ponytail: ML Kit 17.2 has no JPEG byte input, so decode the stream JPEG on this thread
+                    val bitmap =
+                        BitmapFactory.decodeByteArray(frame.bytes, 0, frame.bytes.size)
+                            ?: throw IllegalStateException("JPEG decode failed")
+                    val inputImage = InputImage.fromBitmap(bitmap, rotationDegrees)
+                    detector.process(inputImage)
+                        .addOnSuccessListener { faces ->
+                            if (!activeCamera) return@addOnSuccessListener
+                            val swapAxes = rotationDegrees % 180 != 0
+                            val w = if (swapAxes) frame.height else frame.width
+                            val h = if (swapAxes) frame.width else frame.height
                             val detected =
                                 faces.map { face ->
                                     val box = face.boundingBox
-                                    val centerX = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) box.centerX().toFloat() else box.centerY().toFloat()
-                                    val centerY = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) box.centerY().toFloat() else box.centerX().toFloat()
-                                    val w = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) imageProxy.width else imageProxy.height
-                                    val h = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) imageProxy.height else imageProxy.width
+                                    val centerX = if (swapAxes) box.centerY().toFloat() else box.centerX().toFloat()
+                                    val centerY = if (swapAxes) box.centerX().toFloat() else box.centerY().toFloat()
                                     DetectedFace(
                                         id = face.trackingId ?: 0,
                                         x = centerX / w,
@@ -227,31 +282,16 @@ class CameraSessionController(context: Context) {
                                 }
                             onFacesDetected(detected)
                         }
-                    }
-                    .addOnFailureListener { Log.w(TAG, "face detection failed: ${it.message}") }
-                    .addOnCompleteListener { finishFrame(imageProxy, onFrame) }
-            } else {
-                finishFrame(imageProxy, onFrame)
+                        .addOnFailureListener { Log.w(TAG, "face detection failed: ${it.message}") }
+                        .addOnCompleteListener { faceDetectionInFlight = false }
+                } catch (e: Exception) {
+                    faceDetectionInFlight = false
+                    Log.w(TAG, "face detection: ${e.message}")
+                }
             }
-        } else {
-            finishFrame(imageProxy, onFrame)
-        }
-    }
-
-    private fun finishFrame(
-        imageProxy: ImageProxy,
-        onFrame: (ByteArray) -> Unit,
-    ) {
-        try {
-            if (focusPeakingEnabled) {
-                focusPeakingBitmap = computeFocusPeaking(imageProxy)
-            }
-            val jpeg = imageProxy.toConstantResolutionJpeg(activeSettings)
-            onFrame(jpeg)
         } catch (e: Exception) {
-            Log.w(TAG, "finishFrame: ${e.message}")
-        } finally {
-            imageProxy.close()
+            faceDetectionInFlight = false
+            Log.w(TAG, "face detection submit: ${e.message}")
         }
     }
 
@@ -388,7 +428,7 @@ class CameraSessionController(context: Context) {
         return bmp
     }
 
-    private fun ImageProxy.toConstantResolutionJpeg(settings: BridgeSettings): ByteArray {
+    private fun ImageProxy.toCroppedJpeg(settings: BridgeSettings): EncodedFrame {
         val yBuffer = planes[0].buffer.apply { rewind() }
         val vBuffer = planes[2].buffer
 
@@ -408,8 +448,18 @@ class CameraSessionController(context: Context) {
 
         // 2. Calculate crop dimensions with grid-snapping
         val zoom = settings.zoomRatio.coerceAtLeast(1.0f)
-        val cw = ((baseW / zoom).toInt() / 16) * 16
-        val ch = (cw * 9) / 16
+        var cw = ((baseW / zoom).toInt() / 16) * 16
+        var ch = (cw * 9) / 16
+
+        // ponytail: clamp degenerate crops (tiny source / odd presets) so the Rect below stays valid
+        if (cw <= 0 || ch <= 0 || cw > width || ch > height) {
+            cw = ((minOf(width, (height * 16) / 9).coerceAtLeast(16)) / 16) * 16
+            ch = (cw * 9) / 16
+        }
+        if (cw <= 0 || ch <= 0 || cw > width || ch > height) {
+            cw = width
+            ch = height
+        }
 
         // 3. Apply pan/tilt
         val maxScrollX = (width - cw) / 2
@@ -431,21 +481,16 @@ class CameraSessionController(context: Context) {
 
         val streamOutput = ByteArrayOutputStream()
         yuvImage.compressToJpeg(cropRect, settings.jpegQuality.coerceIn(20, 100), streamOutput)
-        val jpegData = streamOutput.toByteArray()
-
-        // ponytail: always resize to target resolution for consistent bandwidth
-        val targetW = settings.resolutionPreset.width
-        val targetH = settings.resolutionPreset.height
-        if (cw != targetW || ch != targetH) {
-            val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
-            val scaled = Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
-            val out = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, settings.jpegQuality.coerceIn(20, 100), out)
-            return out.toByteArray()
-        }
-
-        return jpegData
+        // ponytail: one encode per frame — OBS Browser Source scales the cropped JPEG itself
+        return EncodedFrame(streamOutput.toByteArray(), cw, ch)
     }
+
+    // ponytail: JPEG plus its real dimensions so detection never needs the closed ImageProxy
+    private data class EncodedFrame(
+        val bytes: ByteArray,
+        val width: Int,
+        val height: Int,
+    )
 
     fun focusAt(
         x: Float,
@@ -481,6 +526,7 @@ class CameraSessionController(context: Context) {
         activeSelector = null
         runCatching { detector.close() }
         analysisExecutor.shutdownNow()
+        faceDetectionExecutor.shutdownNow()
     }
 
     companion object {
