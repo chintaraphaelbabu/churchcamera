@@ -5,7 +5,7 @@
   "main": "relay.js",
   "scripts": {
     "start": "node relay.js",
-    "lint": "eslint relay.js",
+    "lint": "eslint relay.js lib/pure.js test/unit.js test/smoke.js",
     "test": "node --test test/unit.js && node test/smoke.js"
   },
   "dependencies": {
