@@ -4,6 +4,16 @@ const https = require('https');
 const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
+const {
+  normalizeObsUrl,
+  summarizeSceneMatch,
+  hostFromUrl,
+  isDefaultSourceName,
+  getDeviceSourceName,
+  getDeviceAgeMs,
+  isDeviceFresh,
+  buildDeviceRecord,
+} = require('./lib/pure');
 
 const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://localhost:4455';
 const OBS_PASSWORD = process.env.OBS_PASSWORD || '';
@@ -34,8 +44,6 @@ function upsertDevice(payload) {
   const now = Date.now();
   const incomingId = payload && payload.id ? String(payload.id) : null;
   const incomingUrl = payload && payload.url ? String(payload.url) : null;
-  const incomingName = payload && payload.name ? String(payload.name) : null;
-  const incomingSourceName = payload && payload.sourceName ? String(payload.sourceName) : null;
 
   let recordId = incomingId && devices[incomingId] ? incomingId : null;
 
@@ -47,79 +55,14 @@ function upsertDevice(payload) {
     recordId = (new Date().getTime()).toString(36) + '-' + Math.floor(Math.random() * 10000);
   }
 
-  const previous = devices[recordId] || {};
+  const previous = devices[recordId]
+    ? { ...devices[recordId], id: recordId }
+    : { id: recordId };
 
-  // ponytail: rtt from phone (previous cycle), half is one-way latency — no clock drift
-  let latencyMs = null;
-  if (payload && payload.rtt !== undefined) {
-    const rtt = Number(payload.rtt);
-    if (Number.isFinite(rtt) && rtt > 0) latencyMs = Math.round(rtt / 2);
-  }
-
-  // Phones heartbeat with their Android model as sourceName. Never let that
-  // clobber a name the relay auto-matched to an OBS browser source.
-  const incomingIsDefault = !incomingSourceName
-    || (incomingName && incomingSourceName === incomingName)
-    || incomingSourceName === SOURCE_NAME;
-
-  let sourceName;
-  let sourceNameAuto;
-  if (previous.sourceNameAuto && incomingIsDefault) {
-    sourceName = previous.sourceName;
-    sourceNameAuto = true;
-  } else {
-    sourceName = incomingSourceName || previous.sourceName || '';
-    sourceNameAuto = false;
-  }
-
-  devices[recordId] = {
-    id: recordId,
-    name: incomingName || previous.name || '',
-    sourceName,
-    sourceNameAuto,
-    url: incomingUrl || previous.url || '',
-    lastSeen: now,
-    latencyMs,
-    batteryLevel: payload && payload.batteryLevel !== undefined ? Number(payload.batteryLevel) : (previous.batteryLevel !== undefined ? previous.batteryLevel : -1),
-  };
+  devices[recordId] = buildDeviceRecord(payload, previous, now, SOURCE_NAME);
   saveDevices();
   return devices[recordId];
 }
-function getDeviceSourceName(device) {
-  const sourceName = device && device.sourceName ? String(device.sourceName).trim() : '';
-  if (sourceName) return sourceName;
-  return SOURCE_NAME;
-}
-
-// A source name is "default" until a human (or auto-match) gives it a real
-// OBS input name. Phones send their Android model on every heartbeat.
-function isDefaultSourceName(device, sourceName) {
-  const value = sourceName !== undefined
-    ? (sourceName ? String(sourceName).trim() : '')
-    : (device && device.sourceName ? String(device.sourceName).trim() : '');
-  if (!value) return true;
-  if (value === SOURCE_NAME) return true;
-  const deviceName = device && device.name ? String(device.name).trim() : '';
-  if (deviceName && value === deviceName) return true;
-  return false;
-}
-
-// Extract the hostname used to identify which browser source shows a phone.
-function hostFromUrl(rawUrl) {
-  if (!rawUrl) return '';
-  try {
-    return new URL(String(rawUrl)).hostname.toLowerCase();
-  } catch (_) {
-    return '';
-  }
-}
-
-function getDeviceAgeMs(device) {
-  const lastSeen = Number(device && device.lastSeen);
-  if (!Number.isFinite(lastSeen) || lastSeen <= 0) return null;
-  return Date.now() - lastSeen;
-}
-
 function serializeDevice(device) {
   return {
     id: device.id,
@@ -131,15 +74,6 @@ function serializeDevice(device) {
     latencyMs: device.latencyMs || null,
     batteryLevel: device.batteryLevel !== undefined ? device.batteryLevel : -1,
   };
-}
-
-function isDeviceFresh(device) {
-  const ageMs = getDeviceAgeMs(device);
-  return ageMs !== null && ageMs < DEVICE_STALE_MS;
-}
-
-function summarizeSceneMatch(items, sourceName) {
-  return items.some((item) => item.sourceName === sourceName && item.sceneItemEnabled !== false);
 }
 
 async function collectDiagnostics() {
@@ -160,21 +94,21 @@ async function collectDiagnostics() {
   const deviceList = Object.values(devices)
     .filter((device) => device && device.url)
     .map((device) => {
-      const sourceName = getDeviceSourceName(device);
+      const sourceName = getDeviceSourceName(device, SOURCE_NAME);
       const inProgram = summarizeSceneMatch(programItems, sourceName);
       const inPreview = summarizeSceneMatch(previewItems, sourceName);
-      const ageMs = getDeviceAgeMs(device);
+      const ageMs = getDeviceAgeMs(device, Date.now());
       return {
         id: device.id,
         name: device.name,
         sourceName,
         sourceNameAuto: !!device.sourceNameAuto,
         autoMatched: !!device.sourceNameAuto,
-        sourceDefault: isDefaultSourceName(device),
+        sourceDefault: isDefaultSourceName(device, undefined, SOURCE_NAME),
         url: device.url,
         lastSeen: device.lastSeen,
         latencyMs: device.latencyMs || null,
-        fresh: isDeviceFresh(device),
+        fresh: isDeviceFresh(device, Date.now(), DEVICE_STALE_MS),
         ageMs,
         state: inProgram ? 'PROGRAM' : inPreview ? 'PREVIEW' : 'IDLE',
         inProgram,
@@ -259,16 +193,11 @@ let connected = false;
 const adminClients = new Set();
 let lastAdminState = null;
 
-function normalizeObsUrl(address) {
-  if (/^wss?:\/\//i.test(address)) return address;
-  return `ws://${address}`;
-}
-
 // ponytail: tally pushed via WebSocket instead of HTTP — persistent phone→relay connection
 function pushTallyViaWs(device, state) {
   const ws = phoneSockets.get(device.id);
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'tally', tallyState: state, sourceName: getDeviceSourceName(device) }));
+    ws.send(JSON.stringify({ type: 'tally', tallyState: state, sourceName: getDeviceSourceName(device, SOURCE_NAME) }));
   }
 }
 
@@ -399,12 +328,12 @@ async function evaluateTally() {
 
     const programItems = programScene ? await getSceneItemsCached(programScene) : [];
     const previewItems = previewScene ? await getSceneItemsCached(previewScene) : [];
-    const deviceList = Object.values(devices).filter((device) => device && isDeviceFresh(device));
+    const deviceList = Object.values(devices).filter((device) => device && isDeviceFresh(device, Date.now(), DEVICE_STALE_MS));
 
     deviceList.forEach((device) => {
-      const sourceName = getDeviceSourceName(device);
-      const programHas = programItems.some((item) => item.sourceName === sourceName && item.sceneItemEnabled !== false);
-      const previewHas = previewItems.some((item) => item.sourceName === sourceName && item.sceneItemEnabled !== false);
+      const sourceName = getDeviceSourceName(device, SOURCE_NAME);
+      const programHas = summarizeSceneMatch(programItems, sourceName);
+      const previewHas = summarizeSceneMatch(previewItems, sourceName);
       const state = programHas ? 'PROGRAM' : previewHas ? 'PREVIEW' : 'IDLE';
       pushTallyViaWs(device, state);
     });
@@ -447,7 +376,7 @@ async function autoMatchDeviceSources() {
     const hosts = await getBrowserSourceHosts();
     for (const device of Object.values(devices)) {
       if (!device || !device.url) continue;
-      const sourceIsDefault = isDefaultSourceName(device);
+      const sourceIsDefault = isDefaultSourceName(device, undefined, SOURCE_NAME);
       // Explicit source names (not default, not auto-matched) are never touched.
       if (!sourceIsDefault && !device.sourceNameAuto) continue;
 

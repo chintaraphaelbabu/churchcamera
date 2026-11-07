@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node relay.js",
     "lint": "eslint relay.js",
-    "test": "node test/smoke.js"
+    "test": "node --test test/unit.js && node test/smoke.js"
   },
   "dependencies": {
     "express": "^4.18.2",
