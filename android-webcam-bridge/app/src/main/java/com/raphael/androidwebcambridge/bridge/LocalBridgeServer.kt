@@ -20,6 +20,7 @@ import java.net.Socket
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ServerSocketFactory
 import javax.net.ssl.SSLContext
@@ -40,6 +41,9 @@ class LocalBridgeServer(
     private val secureListenerFactory = sslContext?.serverSocketFactory
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val latestFrame = AtomicReference(ByteArray(0))
+
+    // ponytail: bumped on every submitFrame so clients only resend when a new frame lands
+    private val frameSequence = AtomicLong(0L)
     private val currentState = AtomicReference(BridgeState())
     private val activeClients = AtomicInteger(0)
 
@@ -83,6 +87,7 @@ class LocalBridgeServer(
 
     fun submitFrame(frame: ByteArray) {
         latestFrame.set(frame)
+        frameSequence.incrementAndGet()
     }
 
     fun start() {
@@ -188,12 +193,11 @@ class LocalBridgeServer(
                             synchronized(audioClients) { audioClients.remove(output) }
                         }
                     }
-                    uri == "/stream.mjpg" || (uri.startsWith("/stream") && !uri.endsWith(".ws")) -> writeMjpeg(client, output)
-                    uri == "/stream.ws" -> handleWebSocketStream(client, output, socket)
+                    uri == "/stream.mjpg" || uri.startsWith("/stream") -> writeMjpeg(client, output)
                     else -> writeText(output, "Not found", "text/plain; charset=utf-8", code = 404)
                 }
                 // ponytail: graceful shutdown — FIN + delay so peer reads response before close() sends RST
-                if (uri != "/stream.mjpg" && !uri.startsWith("/stream") && uri != "/stream.ws" && uri != "/api/audio/out") {
+                if (uri != "/stream.mjpg" && !uri.startsWith("/stream") && uri != "/api/audio/out") {
                     runCatching { client.shutdownOutput() }
                     delay(10)
                 }
@@ -220,8 +224,17 @@ class LocalBridgeServer(
 
         onConnectionStatusChanged(activeClients.incrementAndGet())
 
+        // ponytail: only send once per new frame, skip repeats, drop frames if client lags
+        var lastSentSequence = -1L
         try {
             while (socket.isConnected && !socket.isClosed && scope.isActive) {
+                val sequence = frameSequence.get()
+                if (sequence == lastSentSequence) {
+                    // ponytail: no new frame — brief poll, no write
+                    delay(2L)
+                    continue
+                }
+                lastSentSequence = sequence
                 val frame = latestFrame.get()
                 if (frame.isNotEmpty()) {
                     output.write("--frame\r\n".toByteArray())
@@ -230,10 +243,6 @@ class LocalBridgeServer(
                     output.write(frame)
                     output.write("\r\n".toByteArray())
                     output.flush()
-                    delay(16L)
-                } else {
-                    // ponytail: no frame — sleep longer, saves CPU vs 60Hz empty polling
-                    delay(100L)
                 }
             }
         } catch (e: Exception) {
@@ -294,11 +303,31 @@ class LocalBridgeServer(
         client: Socket,
     ) {
         try {
+            // Read WebSocket handshake headers to find Sec-WebSocket-Key
+            val reader = BufferedReader(InputStreamReader(BufferedInputStream(client.getInputStream()), StandardCharsets.UTF_8))
+            var wsKey = ""
+            val guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isBlank()) break
+                val colonIndex = line.indexOf(':')
+                if (colonIndex > 0) {
+                    val headerName = line.substring(0, colonIndex).trim()
+                    if (headerName.equals("Sec-WebSocket-Key", ignoreCase = true)) {
+                        wsKey = line.substring(colonIndex + 1).trim()
+                    }
+                }
+            }
+            val acceptHash = java.util.Base64.getEncoder().encodeToString(
+                java.security.MessageDigest.getInstance("SHA-1").digest(
+                    (wsKey + guid).toByteArray(Charsets.UTF_8)
+                )
+            )
             val handshakeResponse = (
                     "HTTP/1.1 101 Switching Protocols\r\n" +
                     "Upgrade: websocket\r\n" +
                     "Connection: Upgrade\r\n" +
-                    "Sec-WebSocket-Accept: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+                    "Sec-WebSocket-Accept: $acceptHash\r\n" +
                     "\r\n"
                 )
             output.write(handshakeResponse.toByteArray(StandardCharsets.UTF_8))
@@ -334,7 +363,7 @@ class LocalBridgeServer(
                         val discard = ByteArray(minOf(1024, inputStream.available()))
                         inputStream.read(discard)
                     } else {
-                        delay(16L)
+                        delay(5L)
                     }
                 }
             } finally {
