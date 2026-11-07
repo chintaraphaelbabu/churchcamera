@@ -17,12 +17,14 @@ Android phone → professional OBS camera with tally, remote control, and focus 
 - **Face tracking**: ML Kit face detection, throttled to every 5th analysis frame; click-to-follow in the dashboard
 - **Focus peaking**: edge-detection overlay on the phone preview
 - **Volume key control**: assign volume keys to focus/zoom/ISO/shutter rails
+- **Background streaming**: camera analysis runs on the ViewModel's process lifetime, so MJPEG and tally continue with the app in the background or the screen off (see the caveats in `problems.md`)
 
 ### Streaming & OBS
 - **MJPEG stream** at `/stream.mjpg` on plain HTTP port 8787. When TLS is available it is also served on HTTPS port 8788.
 - **Frame delivery**: each client receives each new frame once; slow clients skip intermediate frames instead of queuing duplicates.
 - **OBS connects directly to the phone**; the relay does not proxy video.
 - **Tally bridge**: OBS scene events → relay → phone; borders turn red (PROGRAM), yellow (PREVIEW), green (IDLE)
+- **Auto source matching**: the relay discovers OBS `browser_source` inputs, reads each URL's hostname, and maps it to the phone whose callback URL has the same hostname. A manual source name remains the fallback.
 - **obs-websocket v5** integration via the Node.js relay
 - **OBS Lua auto-start script**: `obs-relay.lua` launches the relay when OBS starts
 
@@ -68,7 +70,7 @@ For the director microphone over a LAN IP, use `https://<laptop-ip>:3443` and ac
 1. Enable **obs-websocket v5** (Tools → WebSocket Server Settings, port 4455)
 2. Add a **Browser Source** → URL: `http://<phone-ip>:8787/stream.mjpg` (direct to the phone, no relay proxy). Use `https://<phone-ip>:8788/stream.mjpg` only when TLS is available on the phone.
 3. For tally: in the phone dashboard's **Relay** section, enter `http://<relay-ip>:3000` and save. The phone registers automatically and keeps a relay WebSocket open for tally; `/api/register` and `/api/ping` remain available for manual use.
-4. Set the **Source Name** to the exact OBS Browser Source name. It defaults to the Android device model, which usually does not match OBS, so tally stays IDLE until you change it.
+4. Source names match automatically: the relay reads each OBS Browser Source URL hostname and maps it to the phone whose callback URL has the same hostname. A manual **Source Name** in the phone dashboard is the fallback. The admin panel shows an `AUTO` badge for matched phones, or an amber "set source name in phone dashboard" hint when no source matched.
 
 ### Optional: auto-start relay with OBS
 In OBS → Tools → Scripts → Add Scripts → select `obs-relay/obs-relay.lua`. Uses `script_path()` — no hardcoded paths.
@@ -78,6 +80,8 @@ In OBS → Tools → Scripts → Add Scripts → select `obs-relay/obs-relay.lua
 ```
 obs-relay/                          # Node.js relay
   relay.js                          #   main relay process
+  lib/pure.js                       #   pure helpers: URL/hostname, device record, freshness
+  test/unit.js, test/smoke.js       #   unit + smoke tests run by npm test
   obs-relay.lua                     #   OBS Lua auto-start script
   admin/index.html                  #   status panel, tally cards, director mic
   devices.json                      #   registered phone persistence
@@ -141,4 +145,4 @@ There is no authentication on these endpoints.
 
 ## Known limitations
 
-See [android-webcam-bridge/problems.md](android-webcam-bridge/problems.md). Highlights: the camera/stream stops when the app is backgrounded, there is no adaptive quality, MJPEG is bandwidth-heavy, and the relay/phone endpoints have no authentication.
+See [android-webcam-bridge/problems.md](android-webcam-bridge/problems.md). Highlights: process death or OEM battery killers can still stop background streaming, there is no adaptive quality, MJPEG is bandwidth-heavy, and the relay/phone endpoints have no authentication.

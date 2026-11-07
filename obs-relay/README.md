@@ -8,11 +8,13 @@ The relay uses `obs-websocket` v5 and evaluates each registered phone's OBS sour
 - `PREVIEW` when the source is visible in Preview
 - `IDLE` when it is in neither
 
-Each device uses its own `sourceName`. If a device has none, the relay falls back to `SOURCE_NAME`.
+Each device stores its own `sourceName`. The relay auto-matches a phone to an OBS `browser_source` by comparing the source URL hostname with the phone's callback URL hostname. If a device has no usable name and no source matches, the relay falls back to `SOURCE_NAME`.
 
 ## Components
 
 - `relay.js` - main relay process, OBS connection, tally evaluation, relay WebSocket, discovery
+- `lib/pure.js` - pure helpers for URL/hostname matching, device records, and freshness
+- `test/unit.js`, `test/smoke.js` - unit and smoke tests run by `npm test`
 - `admin/index.html` - single-page status UI: OBS connection/scene, device cards (tally, latency, battery), director push-to-talk, stream links
 - `devices.json` - local persistence for registered phones
 - `obs-relay.lua` - OBS Lua script that starts the relay with OBS
@@ -21,10 +23,11 @@ Each device uses its own `sourceName`. If a device has none, the relay falls bac
 ## How it works
 
 1. The relay connects to OBS through `obs-websocket`.
-2. It subscribes to OBS scene/source events (Program/Preview scene changes, scene item enable/create/remove/reindex, input show state).
-3. For each fresh device it checks whether the device's source name is present and enabled in Program and Preview.
-4. The phone opens a WebSocket at `/tally` and sends `{"type":"auth","deviceId":"..."}`. The relay upserts the device from that message and pushes tally updates over the socket.
-5. The relay also accepts `POST /api/register` and `POST /api/ping`; the phone heartbeats every 10 seconds.
+2. It subscribes to OBS scene/source events (Program/Preview scene changes, scene item enable/create/remove/reindex, input show state, input create/remove/rename).
+3. It discovers `browser_source` inputs, reads each input's URL hostname, and maps it to the device whose callback URL has the same hostname. Phones with a blank, Android-model, or `SOURCE_NAME` source name are auto-matched and persisted with `sourceNameAuto = true`.
+4. For each fresh device it checks whether the device's source name is present and enabled in Program and Preview.
+5. The phone opens a WebSocket at `/tally` and sends `{"type":"auth","deviceId":"..."}`. The relay upserts the device from that message and pushes tally updates over the socket.
+6. The relay also accepts `POST /api/register` and `POST /api/ping`; the phone heartbeats every 10 seconds. A heartbeat that only sends the Android model does not overwrite an auto-matched source name.
 
 A device is considered stale after 10 seconds without a ping (`DEVICE_STALE_MS`). Devices are removed after 5 minutes without a ping (`DEVICE_GC_AGE_MS`).
 
@@ -42,6 +45,7 @@ The page shows:
 
 - OBS connection state and current Program/Preview scene
 - One card per registered phone: tally state, latency, battery, and a link to that phone's `/stream.mjpg`
+- An `AUTO` badge when the relay matched the phone to an OBS Browser Source by URL hostname, or an amber "set source name in phone dashboard" hint when nothing matched
 - A director push-to-talk button that sends audio to all connected phones
 
 It does not expose per-phone camera controls (ISO, white balance, shutter, focus, AF). Use the phone dashboard for those. The `/api/diagnostics` endpoint returns the same diagnostics data as JSON.
@@ -64,9 +68,17 @@ You can register as many phones as you want. Each phone should:
 
 - point to the same relay host
 - keep heartbeating so its IP can change without breaking the setup
-- set its **Source Name** in the phone dashboard to the exact OBS Browser Source name
+- have its own OBS Browser Source pointing at that phone's `/stream.mjpg`
 
-A new phone's source name defaults to the Android device model, which usually does not match OBS. Tally stays `IDLE` until the exact source name is set.
+Source names are matched automatically by URL hostname. A new phone registers with the Android model as a placeholder; once the relay finds an OBS Browser Source with the same hostname, it stores the real input name and shows an `AUTO` badge. Set a **Source Name** in the phone dashboard manually only when the admin page shows the amber hint.
+
+## Development
+
+```bash
+npm install
+npm test     # unit tests (node --test) + smoke test
+npm run lint
+```
 
 ## Environment variables
 

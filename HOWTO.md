@@ -6,7 +6,7 @@ This guide covers only the tally path: OBS to relay to Android phones.
 
 The relay reads tally state from OBS and sends it to your phones.
 Each phone runs the Android bridge app, hosts a local HTTP server, and exposes a callback URL that the relay can reach.
-Each phone is mapped to its own OBS source name.
+The relay maps each phone to its own OBS Browser Source by matching the source URL's hostname to the phone's callback URL hostname. A manual source name remains the fallback.
 
 The tally states are:
 
@@ -35,9 +35,9 @@ In OBS:
 - open the websocket server settings
 - make sure the server is enabled
 - confirm the port is `4455`
-- note the Browser Source names you want to track, such as `phone1` and `phone2`
+- note the Browser Source URLs you want to track (each should point at a phone's `/stream.mjpg`)
 
-Each phone/source pair is configured in the phone dashboard, not in OBS itself.
+Each OBS Browser Source should point at a phone's own `/stream.mjpg` URL. The relay matches the phone and source by URL hostname, so you do not need to pre-configure the source names in the phone dashboard.
 
 ## 2. Start the relay
 
@@ -90,13 +90,15 @@ The app stores the relay device id so it can keep the same registration even if 
 
 Manual fallback: the relay still accepts direct `POST /api/register` and `POST /api/ping` calls. You do not need a separate register button for normal use.
 
-### Set the OBS source name
+### Source names match automatically
 
-A new phone's source name defaults to the Android device model name (for example `Pixel 7`). That usually does not match an OBS Browser Source name, so the tally stays `IDLE`.
+A new phone registers with the Android model as a placeholder source name. The relay discovers OBS `browser_source` inputs, reads each source URL's hostname, and maps it to the phone whose callback URL has the same hostname. When it finds a match, the relay stores the OBS input name and marks it as auto-matched.
 
-In the phone dashboard's **Relay** section, set **Source Name** to the exact OBS Browser Source name, for example `phone1`, then tap **Save**.
+You do not need to set a source name first. The admin page shows an `AUTO` badge for matched phones. If no OBS Browser Source matches, it shows an amber "set source name in phone dashboard" hint.
 
-The relay matches the name exactly (case-sensitive) against sources in the current OBS Program and Preview scenes.
+Manual fallback: in the phone dashboard's **Relay** section, set **Source Name** to the exact OBS Browser Source name, for example `phone1`, then tap **Save**.
+
+The relay matches a manual name exactly (case-sensitive) against sources in the current OBS Program and Preview scenes. A heartbeat that only sends the Android model does not overwrite an auto-matched name.
 
 ## 4. Verify it works
 
@@ -113,7 +115,7 @@ Repeat the same registration steps on each additional phone:
 
 1. Open the phone dashboard.
 2. Set the same relay host and tap **Save**.
-3. In the **Relay** section, set that phone's **Source Name** to its OBS Browser Source name and tap **Save**.
+3. Make sure that phone has its own OBS Browser Source pointing at its `/stream.mjpg` URL. Source names are auto-matched by hostname; set a **Source Name** manually only if the admin page shows the amber hint.
 4. Leave the app running so the heartbeat keeps it fresh.
 
 The relay sends tally updates to the matching registered phone for each source name.
@@ -121,9 +123,9 @@ That means phone1 can follow source `phone1` and phone2 can follow source `phone
 
 Important:
 
-- give each phone its own OBS Browser Source name if you want individual tally
+- give each phone its own OBS Browser Source pointing at that phone's `/stream.mjpg`
 - register each phone separately on the relay (automatic when it saves the relay host)
-- set the matching source name for each phone in that phone's dashboard
+- rely on auto-matching, or set the matching source name manually in that phone's dashboard if no source matched
 
 If you want the same tally on every phone, give every phone the same source name.
 
@@ -149,7 +151,7 @@ DELETE http://<relay-ip>:3000/api/devices/<device-id>
 
 - If the relay does not connect to OBS, check that OBS websocket v5 is enabled and the port is `4455`.
 - If the phone does not register, make sure the relay host is reachable from the phone. Guest WiFi may block broadcast and client isolation, so enter the relay IP manually.
-- If tally state never changes, confirm the phone's **Source Name** exactly matches the OBS Browser Source name. The default is the Android device model, which usually does not match.
+- If tally state never changes, check that an OBS Browser Source URL points at that phone's IP/host and that the admin page shows either an `AUTO` badge or the correct source name. If it shows the amber "set source name in phone dashboard" hint, set the phone's **Source Name** to the exact OBS Browser Source name.
 - If you see stale devices in the admin page, wait for the 5-minute cleanup or delete them through the API.
 
 ## Files involved

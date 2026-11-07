@@ -8,19 +8,23 @@ This document tracks current known issues, hardware limitations, and behavior qu
 - **Occlusion**: If the camera source is completely covered by a full-screen image or another video layer, OBS may stop sending "Active" signals to save power, which could cause the tally to turn yellow or green even while live.
 
 ## 2. Camera Lifecycle and Backgrounding
-- **Camera is Activity-bound**: CameraX is bound to the Activity lifecycle. Backgrounding the app unbinds the camera and stops the stream. The foreground service keeps the process alive but does not keep the camera streaming.
-- **Tally pauses in background**: `ON_STOP` pauses the relay heartbeat and closes the tally WebSocket. They restart on `ON_START`/`ON_RESUME`.
+- **Process-lifetime capture**: Camera analysis is bound to the ViewModel's process lifecycle; only the preview is detached when the Activity stops. Pressing Home or turning the screen off keeps MJPEG streaming and the tally heartbeat alive. The foreground service keeps the process alive and its notification has a **Stop** action; the wake lock is held for the whole stream.
+- **Process death**: If Android kills the process while backgrounded, the camera and stream stop until the app is reopened.
+- **OEM battery killers**: Aggressive battery management (for example OxygenOS or MIUI) may still kill the process. Request the battery optimization exemption in the app.
+- **Notification permission**: Android 13+ notification permission is not requested, so the foreground notification and its Stop action may be hidden.
+- **Camera HAL behavior**: Some OEM camera HALs close the camera on screen-off despite the wake lock.
 
 ## 3. No Adaptive Quality
 - **Fixed settings**: Resolution and frame rate are selected by the user. There is no adaptation to network conditions or device thermal state.
 
 ## 4. MJPEG Transport Costs
 - **Bandwidth**: MJPEG sends every frame as a JPEG, so bandwidth use is high. H.264/WebRTC is not implemented.
-- **Double encoding**: Each frame may be JPEG-encoded twice when the crop size differs from the target resolution (once for the crop, once after scaling).
+- **Variable output size**: Each frame is JPEG-encoded once at the crop size and emitted directly; OBS scales it. Output dimensions therefore follow the crop (`cw x ch`), not always the selected resolution preset. The preset sets the analysis target resolution.
 
 ## 5. Face Detection Throttling
 - **Every fifth frame**: Face detection runs on every fifth analysis frame, not at a literal 30 FPS.
-- **ImageProxy held**: The analysis ImageProxy is held until ML Kit finishes, which caps the analysis frame rate.
+- **Dedicated executor**: Detection runs on its own executor after the `ImageProxy` is closed and the frame is JPEG-encoded. If a detection is already in flight, new frames are skipped rather than queued, so it no longer caps the streaming frame rate.
+- **Crop-relative coordinates**: Detection runs on the cropped/zoomed JPEG, so faces outside the current crop are not detected and face coordinates are relative to the crop, not the full sensor.
 
 ## 6. Manual Exposure Fallback
 - **Forced values**: Turning AE off with only ISO or only shutter set forces the other value to a hardcoded fallback (ISO 400 / 20 ms).

@@ -15,7 +15,7 @@ This project turns your Android phone into a remote-controlled webcam for OBS an
 - **Software Processing**: Panning and zooming happen in software, bypassing system-level hardware limits.
 
 ### 3. AI Face Tracking (Follow Faces)
-- **Detection**: Uses Google ML Kit to identify faces. Detection is throttled to every fifth analysis frame, so it is not a fixed 30 FPS.
+- **Detection**: Uses Google ML Kit to identify faces. Detection runs on a dedicated executor after the analysis frame is JPEG-encoded and its `ImageProxy` is closed. It runs on every fifth frame and is skipped while a previous detection is in flight, so it does not cap the streaming frame rate.
 - **Dynamic Lock**: Click on a person's face in the dashboard preview to make the camera follow them automatically.
 - **Smooth Framing**: The camera pans and tilts the software crop to keep the selected subject centered.
 
@@ -34,13 +34,15 @@ This project turns your Android phone into a remote-controlled webcam for OBS an
 
 ### 6. Streaming
 - **MJPEG Output**: The actual transport is MJPEG over HTTP at `/stream.mjpg`, compatible with OBS "Browser Source".
+- **Single JPEG encode**: Each frame is JPEG-encoded once at the crop size and sent directly; OBS scales it. Output dimensions follow the crop (`cw x ch`), while the resolution preset sets the analysis target resolution.
+- **Background streaming**: Camera analysis is bound to the ViewModel's process lifetime; only the preview detaches when the Activity stops. Home or screen-off keeps MJPEG and tally alive. Process death, OEM battery killers, missing notification permission, and some camera HALs can still interrupt it (see [problems.md](problems.md)).
 - **Ports**: Plain HTTP on `8787`; HTTPS on `8788` when TLS is available.
 - **H.264/WebRTC**: Not implemented.
 
 ## Architecture
 
 - **ViewModel**: State machine that coordinates camera hardware, AI detection, and network commands.
-- **Camera Controller**: Video pipeline that performs software cropping, JPEG encoding, and AI face detection.
+- **Camera Controller**: Video pipeline that performs software cropping, a single JPEG encode per frame, and AI face detection on a dedicated executor.
 - **Local Server**: Lightweight HTTP server that delivers the dashboard, handles the MJPEG stream, and routes audio via SSE and HTTP endpoints.
 - **Relay Manager**: Registers with the relay, heartbeats, caches the relay host per SSID, and receives tally over WebSocket.
 
@@ -58,9 +60,9 @@ The app requires the following runtime permissions:
 4.  In OBS, add a **Browser Source** pointing to `http://<phone-ip>:8787/stream.mjpg`. Use `https://<phone-ip>:8788/stream.mjpg` only when TLS is available.
 5.  Use the **Hold to Speak** buttons on both the phone and dashboard for two-way audio intercom.
 
-For tally, open the dashboard's **Relay** section, enter the relay host, save, and set **Source Name** to the exact OBS Browser Source name. The source name defaults to the Android device model, so tally stays IDLE until it is changed.
+For tally, open the dashboard's **Relay** section and enter the relay host. Source names are matched automatically: the relay maps each OBS Browser Source URL hostname to the phone with the same callback URL hostname, and the admin page shows an `AUTO` badge. If no source matches, the admin page shows an amber hint; set **Source Name** manually in the dashboard as the fallback.
 
-Keep the app in the foreground while streaming. Backgrounding unbinds CameraX and stops the stream; see [problems.md](problems.md).
+Streaming continues when the app is backgrounded or the screen is off: camera analysis is bound to the ViewModel's process lifetime, only the preview detaches from the Activity, and a foreground service with a Stop action keeps the process alive. See [problems.md](problems.md) for remaining caveats (process death, OEM battery killers, notification permission, camera HAL behavior).
 
 ## Device Support
 - **Resolution**: Supports up to 4K internal capture.
