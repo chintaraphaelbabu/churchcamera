@@ -25,6 +25,7 @@ keystore.properties
 *.p12
 *.pem
 debug.keystore
+android-webcam-bridge/key
 
 # Editors
 .vscode/
