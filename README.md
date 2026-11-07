@@ -5,34 +5,44 @@ Android phone → professional OBS camera with tally, remote control, and focus 
 ## Features
 
 ### Camera
-- **Resolution presets**: 720p, 1080p, 1440p, 4K — analysis pipeline matches selected preset
-- **Lens switching**: front/rear cameras, any physical lens on the device
-- **Manual ISO**: 50–3200, slider on phone and relay admin panel
-- **Manual shutter**: 1–1000 ms, slider on phone and relay admin panel
-- **White balance**: Kelvin slider 2500–10000K on phone, Planckian approximation via `kelvinToRggbGains()`
-- **Manual focus**: distance in diopters, auto-focus toggle
-- **Exposure compensation**: +/- 6 EV
-- **Dual-layer zoom**: physical lens zoom + independent digital crop
-- **Face tracking**: ML Kit face detection at 30 FPS, click-to-follow in dashboard
-- **Focus peaking**: real-time edge detection overlay on phone preview (4-direction Sobel-like, ~2ms per frame)
+- **Resolution presets**: 720p, 1080p, 1440p, 4K
+- **Frame rate**: 24, 30, or 60 FPS
+- **Lens switching**: front/rear cameras and any physical lens on the device
+- **Manual ISO**: 100–3200 on the dashboard slider (step 50); the volume-key rail goes up to 6400. `0` = AUTO.
+- **Manual shutter**: 1–250 ms on the dashboard slider; the volume-key rail steps 0, 1, 2, 4, 8, 15, 30, 60, 120, 250, 500 ms. `0` = AUTO. Values display as e.g. `60ms`.
+- **White balance**: Kelvin slider 2500–10000 K on the phone; `0` = auto. Uses a Planckian approximation (`kelvinToRggbGains()`).
+- **Manual focus**: distance in diopters with an auto-focus toggle
+- **Exposure compensation**: -6 to +6 EV (only applied when ISO and shutter are both AUTO)
+- **Dual-layer zoom**: separate physical lens zoom and digital crop. The dashboard digital slider runs 1–10x; the phone volume rail caps combined zoom at 10x.
+- **Face tracking**: ML Kit face detection, throttled to every 5th analysis frame; click-to-follow in the dashboard
+- **Focus peaking**: edge-detection overlay on the phone preview
 - **Volume key control**: assign volume keys to focus/zoom/ISO/shutter rails
 
 ### Streaming & OBS
-- **MJPEG stream** at `/stream.mjpg` — drop into OBS Browser Source
-- **Tally bridge**: OBS → relay → phone, borders turn red (PROGRAM) / yellow (PREVIEW) / green (IDLE)
-- **obs-websocket v5** integration via Node.js relay
-- **OBS Lua auto-start script**: `obs-relay.lua` launches relay when OBS starts
+- **MJPEG stream** at `/stream.mjpg` on plain HTTP port 8787. When TLS is available it is also served on HTTPS port 8788.
+- **Frame delivery**: each client receives each new frame once; slow clients skip intermediate frames instead of queuing duplicates.
+- **OBS connects directly to the phone**; the relay does not proxy video.
+- **Tally bridge**: OBS scene events → relay → phone; borders turn red (PROGRAM), yellow (PREVIEW), green (IDLE)
+- **obs-websocket v5** integration via the Node.js relay
+- **OBS Lua auto-start script**: `obs-relay.lua` launches the relay when OBS starts
 
 ### Remote Control
-- **Phone web dashboard** at `https://phone-ip:8788/dashboard`: live preview, all camera settings, relay registration
-- **Relay admin panel** at `http://localhost:3000`: OBS status, per-phone tally, per-phone camera controls (ISO, WB, shutter, focus, AF toggle)
-- **SSID-aware relay discovery**: caches relay host per WiFi network, auto-redirects when switching networks
-- **UDP broadcast discovery** (port 9999) for zero-config phone finding on same subnet
+- **Phone web dashboard** at `http://<phone-ip>:8787/dashboard` (or `https://<phone-ip>:8788/dashboard` when TLS is available): live preview, camera settings, relay host, and OBS source name
+- **Relay admin panel** at `http://localhost:3000`: OBS connection/scene status, device cards with tally/latency/battery, a director push-to-talk button, and a link to each phone's `/stream.mjpg`. It has no per-phone camera controls.
+- **SSID → relay-host cache**: remembers a relay host per WiFi network
+- **UDP broadcast discovery** on port 9999. Real mDNS/DNS-SD is not implemented; manual relay IP entry is the fallback.
+
+### Audio intercom
+- **Format**: PCM16 mono, 44.1 kHz
+- **Phone mic → browser**: `/api/audio/out` SSE
+- **Browser dashboard mic → phone**: `/api/audio/in`
+- **Director mic → all phones**: relay WebSocket (`/api/audio/broadcast`)
+- **Not routed into OBS** as an audio source by default
 
 ### Networking
-- SSID cache: remembers relay IP per WiFi network — switch between home and church without re-entering IP
+- SSID → relay-host cache: remembers the relay IP per WiFi network; used when no relay host is saved and as a registration fallback
 - LAN IP detection skips 169.254.x.x (Tailscale) addresses
-- Diagnostics endpoint at `/api/diagnostics` returns relay address, OBS status, device list
+- Relay diagnostics endpoint at `/api/diagnostics` (port 3000) returns relay address, OBS status, and device list
 
 ## Quick start
 
@@ -52,12 +62,13 @@ npm start
 ```
 
 Open `http://localhost:3000` to see the admin panel.
-For the director microphone over a LAN IP, use `https://<laptop-ip>:3443` and accept the certificate warning.
+For the director microphone over a LAN IP, use `https://<laptop-ip>:3443` and accept the certificate warning (requires the relay TLS certificate).
 
 ### OBS
 1. Enable **obs-websocket v5** (Tools → WebSocket Server Settings, port 4455)
-2. Add a **Browser Source** → URL: `https://<phone-ip>:8787/stream.mjpg` (direct to phone, no relay proxy)
-3. For tally: point each phone at `http://relay-ip:3000` in the app's relay field, then tap Register (or rely on auto-register via WebSocket auth)
+2. Add a **Browser Source** → URL: `http://<phone-ip>:8787/stream.mjpg` (direct to the phone, no relay proxy). Use `https://<phone-ip>:8788/stream.mjpg` only when TLS is available on the phone.
+3. For tally: in the phone dashboard's **Relay** section, enter `http://<relay-ip>:3000` and save. The phone registers automatically and keeps a relay WebSocket open for tally; `/api/register` and `/api/ping` remain available for manual use.
+4. Set the **Source Name** to the exact OBS Browser Source name. It defaults to the Android device model, which usually does not match OBS, so tally stays IDLE until you change it.
 
 ### Optional: auto-start relay with OBS
 In OBS → Tools → Scripts → Add Scripts → select `obs-relay/obs-relay.lua`. Uses `script_path()` — no hardcoded paths.
@@ -68,7 +79,7 @@ In OBS → Tools → Scripts → Add Scripts → select `obs-relay/obs-relay.lua
 obs-relay/                          # Node.js relay
   relay.js                          #   main relay process
   obs-relay.lua                     #   OBS Lua auto-start script
-  admin/index.html                  #   status panel + camera controls
+  admin/index.html                  #   status panel, tally cards, director mic
   devices.json                      #   registered phone persistence
 
 android-webcam-bridge/              # Android app (Kotlin/Compose)
@@ -87,16 +98,21 @@ android-webcam-bridge/              # Android app (Kotlin/Compose)
         SettingsTray.kt             #   settings drawer with all toggles
 ```
 
-## API endpoints (phone, port 8787)
+## API endpoints (phone)
+
+Plain HTTP on port 8787. When TLS is available, the same endpoints are also served on HTTPS port 8788.
+There is no authentication on these endpoints.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/state` | GET | Full bridge state + settings JSON |
 | `/api/settings?iso=800` | GET | Update any setting field |
-| `/api/tally?state=PROGRAM` | GET | Tally update from relay |
+| `/api/tally?state=PROGRAM` | GET | Tally update (the relay normally pushes tally over WebSocket) |
 | `/stream.mjpg` | GET | MJPEG video stream |
 | `/dashboard` | GET | Web dashboard |
 | `/obs-bridge` | GET | OBS overlay page with tally indicator |
+| `/api/audio/in?d=<base64>` | GET | Browser/dashboard mic audio into the phone speaker |
+| `/api/audio/out` | GET | SSE audio from the phone mic to browser clients |
 
 ## Relay environment variables
 
@@ -104,13 +120,25 @@ android-webcam-bridge/              # Android app (Kotlin/Compose)
 |----------|---------|-------------|
 | `OBS_ADDRESS` | `ws://localhost:4455` | OBS websocket address |
 | `OBS_PASSWORD` | `` | OBS websocket password |
-| `SOURCE_NAME` | `Browser Full` | Default OBS source to track |
-| `ADMIN_PORT` | `3000` | Admin UI port |
+| `SOURCE_NAME` | `Browser Full` | Fallback OBS source name when a device has none |
+| `ADMIN_PORT` | `3000` | Admin UI + relay WebSocket port |
+| `HTTPS_PORT` | `3443` | Secure admin UI + relay WebSocket port (when TLS is configured) |
+| `TLS_PFX` | `certs/relay.p12` | PKCS12 certificate for the secure relay server |
+| `TLS_PASSWORD` | `changeit` | PKCS12 password |
+| `RELAY_HOST` | auto-detected LAN IP | Laptop LAN IP advertised to phones |
 | `POLL_ON_START` | `true` | Skip initial tally scan if `false` |
+| `DEVICE_STALE_MS` | `10000` | Age after which a device is considered stale |
+| `DEVICE_GC_AGE_MS` | `300000` | Age after which an unresponsive device is removed |
 
 ## Network requirements
 
 - Phone and laptop on the **same WiFi subnet** (UDP broadcast + HTTP reachability)
-- Works on home and church single-subnet WiFi out of the box
-- Switching networks: SSID cache auto-redirects to known relay IP for current network
+- Works out of the box on home/guest-friendly single-subnet WiFi
+- Church, guest, and enterprise WiFi often blocks broadcast and enables client isolation; enter the relay IP manually in that case
+- Switching networks: the SSID cache can reuse the relay host known for the current network
 - Mobile hotspot: phone becomes a different subnet → use manual relay IP entry
+- Discovery uses UDP broadcast on port 9999 plus the SSID cache. There is no real mDNS/DNS-SD resolver.
+
+## Known limitations
+
+See [android-webcam-bridge/problems.md](android-webcam-bridge/problems.md). Highlights: the camera/stream stops when the app is backgrounded, there is no adaptive quality, MJPEG is bandwidth-heavy, and the relay/phone endpoints have no authentication.
