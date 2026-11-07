@@ -114,8 +114,8 @@ async function collectDiagnostics() {
     }
   }
 
-  const programItems = currentProgramScene ? await getSceneItems(currentProgramScene) : [];
-  const previewItems = currentPreviewScene ? await getSceneItems(currentPreviewScene) : [];
+  const programItems = currentProgramScene ? await getSceneItemsCached(currentProgramScene) : [];
+  const previewItems = currentPreviewScene ? await getSceneItemsCached(currentPreviewScene) : [];
   const deviceList = Object.values(devices)
     .filter((device) => device && device.url)
     .map((device) => {
@@ -238,6 +238,27 @@ async function getSceneItems(sceneName) {
   }
 }
 
+// ponytail: cache scene item lists — OBS event bursts reuse one call; 750ms TTL is only a safety net
+const SCENE_ITEM_CACHE_TTL_MS = 750;
+const sceneItemCache = new Map(); // sceneName → { items, at }
+
+function invalidateSceneCache(sceneName) {
+  if (sceneName) sceneItemCache.delete(sceneName);
+}
+
+function clearSceneItemCache() {
+  sceneItemCache.clear();
+}
+
+async function getSceneItemsCached(sceneName) {
+  if (!sceneName) return [];
+  const cached = sceneItemCache.get(sceneName);
+  if (cached && Date.now() - cached.at < SCENE_ITEM_CACHE_TTL_MS) return cached.items;
+  const items = await getSceneItems(sceneName);
+  sceneItemCache.set(sceneName, { items, at: Date.now() });
+  return items;
+}
+
 async function getProgramSceneName() {
   try {
     const resp = await obs.call('GetCurrentProgramScene');
@@ -257,8 +278,17 @@ async function getPreviewSceneName() {
   }
 }
 
+// ponytail: serialize tally eval — bursts collapse into one follow-up pass, no debounce latency
+let evaluating = false;
+let evaluateAgain = false;
+
 async function evaluateTally() {
+  if (evaluating) {
+    evaluateAgain = true;
+    return;
+  }
   if (!connected) return;
+  evaluating = true;
   try {
     if (!programScene) {
       programScene = await getProgramSceneName();
@@ -267,8 +297,8 @@ async function evaluateTally() {
       previewScene = await getPreviewSceneName();
     }
 
-    const programItems = programScene ? await getSceneItems(programScene) : [];
-    const previewItems = previewScene ? await getSceneItems(previewScene) : [];
+    const programItems = programScene ? await getSceneItemsCached(programScene) : [];
+    const previewItems = previewScene ? await getSceneItemsCached(previewScene) : [];
     const deviceList = Object.values(devices).filter((device) => device && isDeviceFresh(device));
 
     deviceList.forEach((device) => {
@@ -281,6 +311,12 @@ async function evaluateTally() {
     void publishAdminState('tally');
   } catch (e) {
     console.warn('evaluateTally error', e.message);
+  } finally {
+    evaluating = false;
+    if (evaluateAgain) {
+      evaluateAgain = false;
+      void evaluateTally();
+    }
   }
 }
 
@@ -290,6 +326,7 @@ async function connectOnce() {
   const result = await obs.connect(url, OBS_PASSWORD || undefined);
   console.log('Connected to OBS:', result);
   connected = true;
+  clearSceneItemCache(); // ponytail: never reuse items from a previous OBS session
 
   if (POLL_ON_START) {
     programScene = await getProgramSceneName();
@@ -315,6 +352,22 @@ function installEventHandlers() {
 
   obs.on('SceneItemEnableStateChanged', async (event) => {
     console.log('SceneItemEnableStateChanged', event);
+    invalidateSceneCache(event.sceneName);
+    await evaluateTally();
+  });
+
+  obs.on('SceneItemCreated', async (event) => {
+    invalidateSceneCache(event.sceneName);
+    await evaluateTally();
+  });
+
+  obs.on('SceneItemRemoved', async (event) => {
+    invalidateSceneCache(event.sceneName);
+    await evaluateTally();
+  });
+
+  obs.on('SceneItemListReindexed', async () => {
+    clearSceneItemCache();
     await evaluateTally();
   });
 
@@ -326,6 +379,7 @@ function installEventHandlers() {
   obs.on('ConnectionClosed', (data) => {
     console.log('OBS connection closed', data);
     connected = false;
+    clearSceneItemCache();
     void publishAdminState('disconnected');
   });
   obs.on('AuthenticationFailure', (err) => console.warn('OBS auth failure', err));

@@ -60,10 +60,11 @@ function render(data){
     const fresh=d.fresh!==false;
     const dotClass=fresh?state:'offline';
     const label=fresh?LABELS[state]||'READY':'NO SIGNAL';
-    const i=d.id||'';
+    const streamUrl=(d.url||'').trim().replace(/\/+$/,'');
+    const streamLink=streamUrl?'<a href="'+streamUrl+'/stream.mjpg" target="_blank" rel="noopener">stream.mjpg</a>':(d.name||d.sourceName||'');
     const lat=d.latencyMs; const latStr=lat!=null?(lat<1?'<1ms':lat<10?lat+'ms':Math.round(lat)+'ms'):'?';
     const bat=d.batteryLevel>=0?d.batteryLevel+'%':'';
-    return '<div class="card'+(fresh?'':' stale')+'"><div class="dot '+dotClass+'"></div><div class="info"><div class="name">'+(d.sourceName||'?')+'</div><div class="status '+dotClass+'">'+label+'</div><div class="small">'+(i?'<a href="/api/stream/'+i+'" target=_blank>stream/'+i+'</a>':'')+' · '+latStr+(bat?' · '+bat:'')+'</div></div></div>'
+    return '<div class="card'+(fresh?'':' stale')+'"><div class="dot '+dotClass+'"></div><div class="info"><div class="name">'+(d.sourceName||'?')+'</div><div class="status '+dotClass+'">'+label+'</div><div class="small">'+(streamLink?streamLink+' · ':'')+latStr+(bat?' · '+bat:'')+'</div></div></div>'
   }).join('');
 }
 
