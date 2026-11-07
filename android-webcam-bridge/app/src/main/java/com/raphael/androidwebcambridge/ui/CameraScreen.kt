@@ -2,8 +2,10 @@ package com.raphael.androidwebcambridge.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -50,6 +52,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.raphael.androidwebcambridge.bridge.BridgeState
 import com.raphael.androidwebcambridge.bridge.BridgeViewModel
 import com.raphael.androidwebcambridge.bridge.CameraSessionController
+import com.raphael.androidwebcambridge.bridge.ForegroundService
 import com.raphael.androidwebcambridge.bridge.ResolutionPreset
 import com.raphael.androidwebcambridge.bridge.TallyState
 import com.raphael.androidwebcambridge.bridge.formatShutter
@@ -85,7 +88,6 @@ fun CameraScreen() {
 
     val viewModel: BridgeViewModel = viewModel()
     val state by viewModel.state.collectAsState()
-    val cameraController = remember { CameraSessionController(context) }
     val previewView =
         remember {
             PreviewView(context).apply {
@@ -146,9 +148,8 @@ fun CameraScreen() {
                     viewModel.refreshRelayRegistration()
                 } else if (event == Lifecycle.Event.ON_RESUME) {
                     viewModel.pingRelayNow()
-                } else if (event == Lifecycle.Event.ON_STOP) {
-                    viewModel.pauseRelayHeartbeat()
                 }
+                // ponytail: keep tally alive on Home/screen-off; only real teardown pauses it in onCleared.
             }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
@@ -168,31 +169,13 @@ fun CameraScreen() {
         }
     }
 
-    LaunchedEffect(previewView, state.cameraRebindToken) {
-        runCatching {
-            cameraController.bind(
-                previewView = previewView,
-                lifecycleOwner = lifecycleOwner,
-                settings = state.settings,
-                onFrame = viewModel::onFrame,
-                onFacesDetected = viewModel::onFacesDetected,
-                onStatus = { viewModel.markCameraReady(true, it) },
-            )
-        }.onFailure { error ->
-            viewModel.reportCameraError(error.message ?: error::class.java.simpleName)
-        }
-    }
-
-    LaunchedEffect(state.settings, state.cameraReady) {
-        if (state.cameraReady) {
-            cameraController.applyLiveControls(state.settings)
-        }
+    LaunchedEffect(previewView) {
+        viewModel.bindCamera(previewView, lifecycleOwner)
     }
 
     LaunchedEffect(focusPeakingEnabled) {
-        cameraController.focusPeakingEnabled = focusPeakingEnabled
+        viewModel.setFocusPeakingEnabled(focusPeakingEnabled)
         if (!focusPeakingEnabled) {
-            cameraController.focusPeakingBitmap = null
             focusPeakingBitmap.value = null
         }
     }
@@ -200,24 +183,25 @@ fun CameraScreen() {
     // ponytail: poll focus peaking bitmap at ~12fps, frame already processed
     LaunchedEffect(focusPeakingEnabled) {
         while (isActive && focusPeakingEnabled) {
-            val bmp = cameraController.focusPeakingBitmap
+            val bmp = viewModel.focusPeakingBitmap
             focusPeakingBitmap.value = bmp?.takeIf { !it.isRecycled }?.asImageBitmap()
             delay(83)
         }
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(previewView, viewModel) {
         onDispose {
-            cameraController.close()
+            // ponytail: analysis stays alive in the ViewModel; only the preview surface is released.
+            viewModel.onScreenDisposed(previewView)
             runCatching { context.stopService(Intent(context, com.raphael.androidwebcambridge.bridge.ForegroundService::class.java)) }
         }
     }
 
-    // ponytail: partial wake lock keeps CPU alive even when screen dims
+    // ponytail: hold CPU awake for the whole stream, not just 10 minutes — background capture depends on it
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     val wakeLock = remember { powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "app:stream") }
     DisposableEffect(Unit) {
-        wakeLock.acquire(600_000L) // ponytail: 10min safety timeout, OS auto-releases if app crashes
+        wakeLock.acquire()
         onDispose { runCatching { if (wakeLock.isHeld) wakeLock.release() } }
     }
 
@@ -236,6 +220,26 @@ fun CameraScreen() {
                 }
             }
         }
+    }
+
+    // "Stop" in the foreground-service notification asks the UI to finish so the ViewModel tears down the stream.
+    DisposableEffect(context, activity) {
+        val receiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(
+                    receiverContext: Context?,
+                    receivedIntent: Intent?,
+                ) {
+                    activity?.finish()
+                }
+            }
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(ForegroundService.ACTION_STOP_STREAM),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
 
     // ponytail: inactivity timer — dims screen after 30s no touch, tap restores
@@ -306,7 +310,7 @@ fun CameraScreen() {
                                 touchRest()
                                 viewModel.setActiveRail(null)
                                 // ponytail: tap to focus, no lock — lock via focus rail if needed
-                                cameraController.focusAt(offset.x, offset.y, previewView.meteringPointFactory)
+                                viewModel.focusAt(offset.x, offset.y, previewView.meteringPointFactory)
                                 focusPos = offset
                                 focusLocked = false
                             },

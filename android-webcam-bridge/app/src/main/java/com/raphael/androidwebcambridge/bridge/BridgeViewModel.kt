@@ -2,6 +2,7 @@ package com.raphael.androidwebcambridge.bridge
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -18,13 +19,20 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Log
+import androidx.camera.core.MeteringPointFactory
+import androidx.camera.view.PreviewView
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
@@ -37,11 +45,27 @@ import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.security.auth.x500.X500Principal
 
-class BridgeViewModel(application: Application) : AndroidViewModel(application) {
+class BridgeViewModel(application: Application) : AndroidViewModel(application), LifecycleOwner {
     private val app: Application = application
     private val prefs = application.getSharedPreferences("bridge_prefs", Context.MODE_PRIVATE)
     private var networkCallbackRegistered = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    // ponytail: process-lifetime owner so CameraX keeps capturing after the Activity stops.
+    private val lifecycleRegistry = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
+
+    private val cameraController = CameraSessionController(application)
+    private var previewView: PreviewView? = null
+    private var previewLifecycleOwner: LifecycleOwner? = null
+    private val previewLifecycleObserver =
+        LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> cameraController.setPreviewActive(true)
+                Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> cameraController.setPreviewActive(false)
+                else -> Unit
+            }
+        }
 
     private val relayManager =
         RelayManager(application, viewModelScope) { status ->
@@ -186,8 +210,86 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     val state: StateFlow<BridgeState> = _state.asStateFlow()
 
     init {
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         startServer()
         startNetworkWatch()
+        startCameraSettingsObserver()
+    }
+
+    fun bindCamera(
+        previewView: PreviewView,
+        previewLifecycleOwner: LifecycleOwner,
+    ) {
+        observePreviewLifecycle(previewLifecycleOwner)
+        this.previewView = previewView
+        try {
+            cameraController.bind(
+                previewView = previewView,
+                analysisLifecycleOwner = this,
+                previewActive = previewLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED),
+                settings = _state.value.settings,
+                onFrame = ::onFrame,
+                onFacesDetected = ::onFacesDetected,
+                onStatus = { status -> markCameraReady(true, status) },
+            )
+        } catch (e: Exception) {
+            reportCameraError(e.message ?: e::class.java.simpleName)
+        }
+    }
+
+    fun onScreenDisposed(previewView: PreviewView) {
+        if (this.previewView === previewView) {
+            cameraController.releasePreview(previewView)
+            this.previewView = null
+        }
+    }
+
+    fun setFocusPeakingEnabled(enabled: Boolean) {
+        cameraController.focusPeakingEnabled = enabled
+        if (!enabled) cameraController.focusPeakingBitmap = null
+    }
+
+    val focusPeakingBitmap: Bitmap? get() = cameraController.focusPeakingBitmap
+
+    fun focusAt(
+        x: Float,
+        y: Float,
+        factory: MeteringPointFactory,
+        onComplete: () -> Unit = {},
+    ) = cameraController.focusAt(x, y, factory, onComplete)
+
+    private fun observePreviewLifecycle(owner: LifecycleOwner) {
+        if (previewLifecycleOwner === owner) return
+        previewLifecycleOwner?.lifecycle?.removeObserver(previewLifecycleObserver)
+        previewLifecycleOwner = owner
+        owner.lifecycle.addObserver(previewLifecycleObserver)
+    }
+
+    // ponytail: apply camera controls from the ViewModel so dashboard changes also work while backgrounded.
+    private fun startCameraSettingsObserver() {
+        viewModelScope.launch {
+            var previousSettings: BridgeSettings? = null
+            var previousToken = _state.value.cameraRebindToken
+            _state.collect { current ->
+                if (current.settings != previousSettings) {
+                    previousSettings = current.settings
+                    cameraController.applyLiveControls(current.settings) { status ->
+                        markCameraReady(true, status)
+                    }
+                }
+                if (current.cameraRebindToken != previousToken) {
+                    previousToken = current.cameraRebindToken
+                    // rebind from the ViewModel: Compose effects may be paused while the Activity is stopped
+                    rebindCameraIfPossible()
+                }
+            }
+        }
+    }
+
+    private fun rebindCameraIfPossible() {
+        val view = previewView ?: return
+        val owner = previewLifecycleOwner ?: return
+        bindCamera(view, owner)
     }
 
     fun setRelayHost(host: String) {
@@ -495,6 +597,10 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
             audioTrack?.release()
             audioTrack = null
         }
+        cameraController.close()
+        previewLifecycleOwner?.lifecycle?.removeObserver(previewLifecycleObserver)
+        previewLifecycleOwner = null
+        previewView = null
         server.stop()
         relayManager.stopDiscovery()
         relayManager.pauseRelayHeartbeat()
@@ -504,6 +610,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
         } catch (e: Exception) {
             Log.w("BridgeVM", "onCleared: ${e.message}")
         }
+        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         super.onCleared()
     }
 }

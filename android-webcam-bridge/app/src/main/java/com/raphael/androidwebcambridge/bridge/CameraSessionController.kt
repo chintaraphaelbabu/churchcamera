@@ -28,6 +28,7 @@ import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
@@ -57,6 +58,14 @@ class CameraSessionController(context: Context) {
     private var camera: Camera? = null
     private var camera2Control: Camera2CameraControl? = null
 
+    // ponytail: analysis binds to the process-lifetime owner; preview is detached separately on ON_STOP.
+    private var analysisLifecycleOwner: LifecycleOwner? = null
+    private var previewUseCase: Preview? = null
+    private var previewView: PreviewView? = null
+    private var activeSelector: CameraSelector? = null
+    private var previewBound = false
+    private var previewShouldBeActive = true
+
     @Volatile
     private var activeSettings: BridgeSettings = BridgeSettings()
 
@@ -74,7 +83,8 @@ class CameraSessionController(context: Context) {
 
     fun bind(
         previewView: PreviewView,
-        lifecycleOwner: LifecycleOwner,
+        analysisLifecycleOwner: LifecycleOwner,
+        previewActive: Boolean,
         settings: BridgeSettings,
         onFrame: (ByteArray) -> Unit,
         onFacesDetected: (List<DetectedFace>) -> Unit,
@@ -111,9 +121,6 @@ class CameraSessionController(context: Context) {
             processImageProxy(imageProxy, onFrame, onFacesDetected)
         }
 
-        provider?.unbindAll()
-        preview.setSurfaceProvider(previewView.surfaceProvider)
-
         val selector =
             if (settings.selectedCameraId != null) {
                 CameraSelector.Builder()
@@ -125,9 +132,68 @@ class CameraSessionController(context: Context) {
                 CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build()
             }
 
-        camera = provider?.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+        this.previewView = previewView
+        this.analysisLifecycleOwner = analysisLifecycleOwner
+        this.previewUseCase = preview
+        this.activeSelector = selector
+        this.previewShouldBeActive = previewActive
+        previewBound = false
+
+        provider?.unbindAll()
+
+        // Analysis lives on the process-lifetime owner, so the stream survives Home/screen-off.
+        camera = provider?.bindToLifecycle(analysisLifecycleOwner, selector, analysis)
         camera2Control = camera?.cameraControl?.let { Camera2CameraControl.from(it) }
+
+        if (previewActive) {
+            attachPreview()
+        }
         applyLiveControls(settings, onStatus)
+    }
+
+    fun setPreviewActive(active: Boolean) {
+        previewShouldBeActive = active
+        if (active) attachPreview() else detachPreview()
+    }
+
+    fun releasePreview(previewView: PreviewView) {
+        if (this.previewView === previewView) {
+            detachPreview()
+            this.previewView = null
+        }
+    }
+
+    private fun attachPreview() {
+        if (!previewShouldBeActive || previewBound) return
+        val provider = provider ?: return
+        val preview = previewUseCase ?: return
+        val view = previewView ?: return
+        val owner = analysisLifecycleOwner ?: return
+        val selector = activeSelector ?: return
+        if (owner.lifecycle.currentState == Lifecycle.State.DESTROYED) return
+        try {
+            preview.setSurfaceProvider(view.surfaceProvider)
+            val boundCamera = provider.bindToLifecycle(owner, selector, preview)
+            val previousCamera = camera
+            camera = boundCamera
+            if (previousCamera !== boundCamera || camera2Control == null) {
+                // re-apply controls if CameraX handed back a different Camera instance
+                camera2Control = boundCamera.cameraControl.let { Camera2CameraControl.from(it) }
+                applyLiveControls(activeSettings)
+            }
+            previewBound = true
+        } catch (e: Exception) {
+            Log.w(TAG, "attachPreview: ${e.message}")
+        }
+    }
+
+    private fun detachPreview() {
+        val provider = provider ?: return
+        val preview = previewUseCase ?: return
+        if (!previewBound) return
+        previewBound = false
+        runCatching { provider.unbind(preview) }.onFailure { Log.w(TAG, "detachPreview: ${it.message}") }
+        runCatching { preview.setSurfaceProvider(null) }
     }
 
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
@@ -399,13 +465,21 @@ class CameraSessionController(context: Context) {
 
     fun close() {
         activeCamera = false
+        previewBound = false
+        previewShouldBeActive = false
         try {
             provider?.unbindAll()
             camera?.cameraControl?.cancelFocusAndMetering()
         } catch (e: Exception) {
             Log.w(TAG, "close: ${e.message}")
         }
+        camera = null
         camera2Control = null
+        previewUseCase = null
+        previewView = null
+        analysisLifecycleOwner = null
+        activeSelector = null
+        runCatching { detector.close() }
         analysisExecutor.shutdownNow()
     }
 
