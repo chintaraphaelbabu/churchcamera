@@ -22,7 +22,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -233,7 +232,6 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private var lastStateUpdateAt = 0L
-    private var tallyHoldJob: Job? = null
 
     fun onFrame(frame: ByteArray) {
         server.submitFrame(frame)
@@ -416,24 +414,6 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         server.updateState(newState)
-
-        if (newState.tallyState == TallyState.IDLE) {
-            if (_state.value.tallyState == TallyState.PROGRAM) {
-                tallyHoldJob?.cancel()
-                tallyHoldJob =
-                    viewModelScope.launch {
-                        delay(1500L)
-                        _state.update {
-                                cur ->
-                            cur.copy(tallyState = TallyState.IDLE, statusMessage = computeStatus(TallyState.IDLE, cur.connectedClients))
-                        }
-                        server.updateState(_state.value)
-                    }
-            }
-        } else {
-            tallyHoldJob?.cancel()
-            tallyHoldJob = null
-        }
     }
 
     private fun updateClientCount(total: Int) {
@@ -492,7 +472,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application) 
                     statusMessage = "Server started",
                     localIpAddress = ip,
                     dashboardUrl = "$proto://$ip:$dashboardPort/dashboard",
-                    streamUrl = "http://$ip:8787/stream.mjpg",
+                    streamUrl = "$proto://$ip:$dashboardPort/stream.mjpg",
                 )
             }
             server.updateState(_state.value)

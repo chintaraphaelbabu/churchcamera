@@ -198,7 +198,7 @@ data class BridgeState(
             .put("operatorSpeaking", operatorSpeaking)
 }
 
-// ponytail: camera-style 1/<value> format
-fun formatShutter(ms: Int): String = if (ms == 0) "AUTO" else "1/$ms"
+// ponytail: explicit ms unit; value is already milliseconds, so "1/x" was misleading
+fun formatShutter(ms: Int): String = if (ms == 0) "AUTO" else "${ms}ms"
 
 fun dashboardPath(): String = "/dashboard"

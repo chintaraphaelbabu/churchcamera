@@ -42,36 +42,22 @@ object BridgeHtmlAssets {
                 }
               }
 
-              async function report() {
-                try {
-                  const server = await fetch('/api/state').then(r => r.json()).catch(() => null);
-                  const connected = server?.connectedClients || 0;
+              // ponytail: OBS events are the only tally truth; client count must not force PROGRAM
+              function report() {
+                const state = _isActive ? 'PROGRAM' : (_isVisible ? 'PREVIEW' : 'IDLE');
 
-                  let state = 'IDLE';
-                  if (_isActive || connected > 0) state = 'PROGRAM';
-                  else if (_isVisible) state = 'PREVIEW';
+                // update UI immediately
+                applyUi(state);
 
-                  // update UI immediately
-                  applyUi(state);
-
-                  // debounce network updates to avoid spamming the phone
-                  if (_debounce) clearTimeout(_debounce);
-                  _debounce = setTimeout(() => {
-                    if (_lastSent !== state) {
-                      fetch('/api/tally?tallyState=' + state + '&_t=' + Date.now()).catch(() => {});
-                      _lastSent = state;
-                    }
-                    _debounce = null;
-                  }, 300);
-                } catch (e) {
-                  // fallback to simple behavior
-                  const fallback = _isActive ? 'PROGRAM' : (_isVisible ? 'PREVIEW' : 'IDLE');
-                  applyUi(fallback);
-                  if (_lastSent !== fallback) {
-                    fetch('/api/tally?tallyState=' + fallback + '&_t=' + Date.now()).catch(() => {});
-                    _lastSent = fallback;
+                // debounce network updates to avoid spamming the phone
+                if (_debounce) clearTimeout(_debounce);
+                _debounce = setTimeout(() => {
+                  if (_lastSent !== state) {
+                    fetch('/api/tally?tallyState=' + state + '&_t=' + Date.now()).catch(() => {});
+                    _lastSent = state;
                   }
-                }
+                  _debounce = null;
+                }, 300);
               }
 
               // OBS Studio visibility events
@@ -422,7 +408,7 @@ object BridgeHtmlAssets {
                   document.getElementById('btn-ISO-A').className = set.iso === 0 ? 'active' : '';
                   
                   document.getElementById('shutter').value = set.shutterSpeedMs || 60;
-                  document.getElementById('shutterVal').textContent = set.shutterSpeedMs > 0 ? '1/' + set.shutterSpeedMs : 'Auto';
+                  document.getElementById('shutterVal').textContent = set.shutterSpeedMs > 0 ? set.shutterSpeedMs + 'ms' : 'Auto';
                   document.getElementById('btn-SH-A').className = set.shutterSpeedMs === 0 ? 'active' : '';
                 }
 
@@ -564,7 +550,7 @@ object BridgeHtmlAssets {
               };
 
               shutter.oninput = () => { 
-                shutterVal.textContent = shutter.value > 0 ? '1/' + shutter.value : 'Auto';
+                shutterVal.textContent = shutter.value > 0 ? shutter.value + 'ms' : 'Auto';
                 throttledPush({ shutterSpeedMs: shutter.value });
               };
 
