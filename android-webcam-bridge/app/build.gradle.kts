@@ -9,6 +9,21 @@ android {
     namespace = "com.raphael.androidwebcambridge"
     compileSdk = 35
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("src/main/res/raw/keystore.p12")
+            storePassword = "changeit"
+            keyAlias = "streamcam_server_v3"
+            keyPassword = "changeit"
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
+
     defaultConfig {
         applicationId = "com.raphael.androidwebcambridge"
         minSdk = 26
