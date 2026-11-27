@@ -44,6 +44,7 @@ data class BridgeSettings(
     val panX: Float = 0f,
     val panY: Float = 0f,
     val faceFollowEnabled: Boolean = false,
+    val faceFollowStrength: Float = 0.7f,
     val selectedFaceId: Int? = null,
     val exposureCompensation: Int = 0,
     val iso: Int = 0,
@@ -52,7 +53,7 @@ data class BridgeSettings(
     val focusDistanceDiopters: Float = 0f,
     val focusAuto: Boolean = true,
     val frameRate: Int = 24,
-    val resolutionPreset: ResolutionPreset = ResolutionPreset.P720,
+    val resolutionPreset: ResolutionPreset = ResolutionPreset.P1080,
     val jpegQuality: Int = 60, // ponytail: 60 still looks fine on OBS, halves bandwidth vs 95
     val bitrateMbps: Int = 4,
     val focusVelocity: Float = 0.1f,
@@ -67,6 +68,7 @@ data class BridgeSettings(
             .put("panX", panX)
             .put("panY", panY)
             .put("faceFollowEnabled", faceFollowEnabled)
+            .put("faceFollowStrength", faceFollowStrength)
             .put("selectedFaceId", selectedFaceId ?: JSONObject.NULL)
             .put("exposureCompensation", exposureCompensation)
             .put("iso", iso)
@@ -87,6 +89,14 @@ data class BridgeSettings(
             query: Map<String, String?>,
             current: BridgeSettings,
         ): BridgeSettings {
+            val sampledWhiteBalance =
+                query["whiteBalanceSample"]
+                    ?.split(",")
+                    ?.takeIf { it.size == 3 }
+                    ?.mapNotNull(String::toIntOrNull)
+                    ?.takeIf { it.size == 3 }
+                    ?.let { WhiteBalanceMath.temperatureForColor(it[0], it[1], it[2]) }
+
             fun <T> read(
                 name: String,
                 parser: (String) -> T,
@@ -103,11 +113,13 @@ data class BridgeSettings(
                 panX = read("panX", String::toFloat, current.panX),
                 panY = read("panY", String::toFloat, current.panY),
                 faceFollowEnabled = query["faceFollowEnabled"]?.let { it == "true" || it == "1" } ?: current.faceFollowEnabled,
+                faceFollowStrength = read("faceFollowStrength", String::toFloat, current.faceFollowStrength).coerceIn(0.1f, 1f),
                 selectedFaceId = read("selectedFaceId", String::toInt, current.selectedFaceId ?: -1).let { if (it == -1) null else it },
                 exposureCompensation = read("exposureCompensation", String::toInt, current.exposureCompensation),
                 iso = read("iso", String::toInt, current.iso),
                 shutterSpeedMs = read("shutterSpeedMs", String::toInt, current.shutterSpeedMs),
-                whiteBalanceKelvin = read("whiteBalanceKelvin", String::toInt, current.whiteBalanceKelvin),
+                whiteBalanceKelvin =
+                    sampledWhiteBalance ?: read("whiteBalanceKelvin", String::toInt, current.whiteBalanceKelvin),
                 focusDistanceDiopters = read("focusDistanceDiopters", String::toFloat, current.focusDistanceDiopters),
                 focusAuto =
                     query["focusAuto"]?.let {
@@ -127,8 +139,9 @@ data class BridgeSettings(
 
 data class DetectedFace(
     val id: Int,
-    val x: Float, // Normalized 0..1
-    val y: Float, // Normalized 0..1
+    // Coordinates and dimensions are normalized within the uncropped source frame.
+    val x: Float,
+    val y: Float,
     val width: Float,
     val height: Float,
 ) {

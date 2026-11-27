@@ -7,10 +7,15 @@ import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.RggbChannelVector
+import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.util.Size
@@ -37,14 +42,19 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
-import kotlin.math.ln
-import kotlin.math.pow
+
+private data class AutoColorCorrection(
+    val transform: ColorSpaceTransform,
+    val gains: RggbChannelVector,
+)
 
 @ExperimentalCamera2Interop
 class CameraSessionController(context: Context) {
     private val appContext = context.applicationContext
     private val cameraProviderFuture = ProcessCameraProvider.getInstance(appContext)
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val faceFollowSmoother = FaceFollowSmoother()
+    private var faceFollowWasEnabled = false
 
     // ponytail: detection runs off the analysis thread so a slow ML Kit call never stalls frames
     private val faceDetectionExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -56,6 +66,27 @@ class CameraSessionController(context: Context) {
                 .enableTracking()
                 .build(),
         )
+
+    @Volatile
+    private var autoColorCorrection: AutoColorCorrection? = null
+
+    private val whiteBalanceCaptureCallback =
+        object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureCompleted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                result: TotalCaptureResult,
+            ) {
+                if (result.get(CaptureResult.CONTROL_AWB_MODE) == CaptureRequest.CONTROL_AWB_MODE_OFF) return
+                val transform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM) ?: return
+                val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS) ?: return
+                val wasMissing = autoColorCorrection == null
+                autoColorCorrection = AutoColorCorrection(transform, gains)
+                if (wasMissing && activeSettings.whiteBalanceKelvin > 0) {
+                    analysisExecutor.execute { applyLiveControls(activeSettings) }
+                }
+            }
+        }
 
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
@@ -73,6 +104,9 @@ class CameraSessionController(context: Context) {
     private var activeSettings: BridgeSettings = BridgeSettings()
 
     @Volatile
+    private var faceFollowPaused = false
+
+    @Volatile
     var focusPeakingEnabled: Boolean = false
 
     @Volatile
@@ -87,17 +121,23 @@ class CameraSessionController(context: Context) {
     @Volatile
     private var faceDetectionInFlight = false
 
-    fun bind(
+    internal fun bind(
         previewView: PreviewView,
         analysisLifecycleOwner: LifecycleOwner,
         previewActive: Boolean,
         settings: BridgeSettings,
         onFrame: (ByteArray) -> Unit,
-        onFacesDetected: (List<DetectedFace>) -> Unit,
+        onFacesDetected: (FaceDetectionResult) -> Unit,
         onStatus: (String) -> Unit,
     ) {
         activeCamera = true
+        if (activeSettings.selectedCameraId != settings.selectedCameraId) {
+            autoColorCorrection = null
+        }
         activeSettings = settings
+        faceFollowSmoother.reset(FollowPan(settings.panX, settings.panY))
+        faceFollowWasEnabled = false
+        faceFollowPaused = false
         provider = cameraProviderFuture.get()
 
         val targetResolution = Size(settings.resolutionPreset.width, settings.resolutionPreset.height)
@@ -116,9 +156,16 @@ class CameraSessionController(context: Context) {
             analysisBuilder,
         ).setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(settings.frameRate, settings.frameRate))
         // ponytail: AWB mode via Extender (highest priority) so CameraX can't override
-        val awbMode = if (settings.whiteBalanceKelvin > 0) CaptureRequest.CONTROL_AWB_MODE_OFF else CaptureRequest.CONTROL_AWB_MODE_AUTO
+        val awbMode =
+            if (settings.whiteBalanceKelvin > 0 && autoColorCorrection != null) {
+                CaptureRequest.CONTROL_AWB_MODE_OFF
+            } else {
+                CaptureRequest.CONTROL_AWB_MODE_AUTO
+            }
         Camera2Interop.Extender(previewBuilder).setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
         Camera2Interop.Extender(analysisBuilder).setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
+        Camera2Interop.Extender(previewBuilder).setSessionCaptureCallback(whiteBalanceCaptureCallback)
+        Camera2Interop.Extender(analysisBuilder).setSessionCaptureCallback(whiteBalanceCaptureCallback)
 
         val preview = previewBuilder.build()
         val analysis = analysisBuilder.build()
@@ -206,14 +253,14 @@ class CameraSessionController(context: Context) {
     private fun processImageProxy(
         imageProxy: ImageProxy,
         onFrame: (ByteArray) -> Unit,
-        onFacesDetected: (List<DetectedFace>) -> Unit,
+        onFacesDetected: (FaceDetectionResult) -> Unit,
     ) {
         val shouldDetect = imageProxy.image != null && activeCamera
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
         // ponytail: encode + close first; detection then works on the JPEG without holding the proxy
         val frame = finishFrame(imageProxy, onFrame)
         if (!shouldDetect || frame == null) return
-        // ponytail: throttle face detection to ~12fps, saves battery at 60fps
+        // Detect every fifth frame; the follow crop is smoothed on every output frame.
         if (++faceDetectCounter % 5 != 0) return
         submitFaceDetection(frame, rotationDegrees, onFacesDetected)
     }
@@ -227,7 +274,7 @@ class CameraSessionController(context: Context) {
                 if (focusPeakingEnabled) {
                     focusPeakingBitmap = computeFocusPeaking(imageProxy)
                 }
-                imageProxy.toCroppedJpeg(activeSettings)
+                imageProxy.toCroppedJpeg(settingsForFrame(activeSettings))
             } catch (e: Exception) {
                 Log.w(TAG, "finishFrame: ${e.message}")
                 null
@@ -245,10 +292,40 @@ class CameraSessionController(context: Context) {
         return frame
     }
 
+    private fun settingsForFrame(settings: BridgeSettings): BridgeSettings {
+        val target = FollowPan(settings.panX, settings.panY)
+        if (!settings.faceFollowEnabled) {
+            faceFollowSmoother.reset(target)
+            faceFollowWasEnabled = false
+            faceFollowPaused = false
+            return settings
+        }
+
+        if (!faceFollowWasEnabled) {
+            faceFollowSmoother.reset(target)
+            faceFollowWasEnabled = true
+        }
+        if (faceFollowPaused) {
+            val heldPan = faceFollowSmoother.hold()
+            return settings.copy(panX = heldPan.x, panY = heldPan.y)
+        }
+        val pan = faceFollowSmoother.update(target, SystemClock.elapsedRealtime(), settings.faceFollowStrength)
+        return settings.copy(panX = pan.x, panY = pan.y)
+    }
+
+    internal fun holdFaceFollowPosition(): FollowPan {
+        faceFollowPaused = true
+        return faceFollowSmoother.hold()
+    }
+
+    internal fun resumeFaceFollow() {
+        faceFollowPaused = false
+    }
+
     private fun submitFaceDetection(
         frame: EncodedFrame,
         rotationDegrees: Int,
-        onFacesDetected: (List<DetectedFace>) -> Unit,
+        onFacesDetected: (FaceDetectionResult) -> Unit,
     ) {
         // ponytail: skip instead of queueing when ML Kit is still busy with the previous frame
         if (faceDetectionInFlight) return
@@ -264,23 +341,22 @@ class CameraSessionController(context: Context) {
                     detector.process(inputImage)
                         .addOnSuccessListener { faces ->
                             if (!activeCamera) return@addOnSuccessListener
-                            val swapAxes = rotationDegrees % 180 != 0
-                            val w = if (swapAxes) frame.height else frame.width
-                            val h = if (swapAxes) frame.width else frame.height
                             val detected =
                                 faces.map { face ->
                                     val box = face.boundingBox
-                                    val centerX = if (swapAxes) box.centerY().toFloat() else box.centerX().toFloat()
-                                    val centerY = if (swapAxes) box.centerX().toFloat() else box.centerY().toFloat()
-                                    DetectedFace(
+                                    FaceFollowMath.mapToSource(
                                         id = face.trackingId ?: 0,
-                                        x = centerX / w,
-                                        y = centerY / h,
-                                        width = box.width().toFloat() / w,
-                                        height = box.height().toFloat() / h,
+                                        centerX = box.centerX().toFloat(),
+                                        centerY = box.centerY().toFloat(),
+                                        boxWidth = box.width().toFloat(),
+                                        boxHeight = box.height().toFloat(),
+                                        frameWidth = frame.width,
+                                        frameHeight = frame.height,
+                                        rotationDegrees = rotationDegrees,
+                                        crop = frame.crop,
                                     )
                                 }
-                            onFacesDetected(detected)
+                            onFacesDetected(FaceDetectionResult(detected, frame.crop))
                         }
                         .addOnFailureListener { Log.w(TAG, "face detection failed: ${it.message}") }
                         .addOnCompleteListener { faceDetectionInFlight = false }
@@ -341,13 +417,22 @@ class CameraSessionController(context: Context) {
 
         // White Balance
         // ponytail: Kelvin→RGB gains via Planckian approximation, sensor-specific but good enough
-        if (settings.whiteBalanceKelvin > 0) {
-            // ponytail: TRANSFORM_MATRIX forces HAL to use our gains instead of its own FAST/HQ mode
+        val automaticCorrection = autoColorCorrection
+        if (settings.whiteBalanceKelvin > 0 && automaticCorrection != null) {
             builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
-            val g = kelvinToRggbGains(settings.whiteBalanceKelvin)
-            builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(g[0], g[1], g[2], g[3]))
+            builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_TRANSFORM, automaticCorrection.transform)
+            val automaticGains =
+                floatArrayOf(
+                    automaticCorrection.gains.red,
+                    automaticCorrection.gains.greenEven,
+                    automaticCorrection.gains.greenOdd,
+                    automaticCorrection.gains.blue,
+                )
+            val gains = WhiteBalanceMath.gainsForTemperature(settings.whiteBalanceKelvin, automaticGains)
+            builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(gains[0], gains[1], gains[2], gains[3]))
         } else {
+            builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
         }
 
@@ -366,33 +451,6 @@ class CameraSessionController(context: Context) {
         runCatching {
             c2Control.setCaptureRequestOptions(builder.build())
         }.onFailure { Log.w(TAG, "setCaptureRequestOptions: ${it.message}") }
-    }
-
-    private fun kelvinToRggbGains(kelvin: Int): FloatArray {
-        val t = kelvin.coerceIn(2500, 10000) / 100f
-        val (rT, gT, bT) =
-            if (t <= 66f) {
-                Triple(
-                    255.0,
-                    99.4708025861 * ln(t) - 161.1195681661,
-                    if (t <= 19) 0.0 else 138.5177312231 * ln(t - 10) - 305.0447927307,
-                )
-            } else {
-                Triple(
-                    329.698727446 * (t - 60f).pow(-0.1332047592f),
-                    288.1221695283 * (t - 60f).pow(-0.0755148492f),
-                    255.0,
-                )
-            }
-        val d65r = 255.0
-        val d65g = 99.4708025861 * ln(65.0) - 161.1195681661
-        val d65b = 138.5177312231 * ln(55.0) - 305.0447927307
-        return floatArrayOf(
-            (d65r / rT).toFloat().coerceIn(0.1f, 10f),
-            (d65g / gT).toFloat().coerceIn(0.1f, 10f),
-            (d65g / gT).toFloat().coerceIn(0.1f, 10f),
-            (d65b / bT).toFloat().coerceIn(0.1f, 10f),
-        )
     }
 
     private fun computeFocusPeaking(image: ImageProxy): Bitmap? {
@@ -482,7 +540,20 @@ class CameraSessionController(context: Context) {
         val streamOutput = ByteArrayOutputStream()
         yuvImage.compressToJpeg(cropRect, settings.jpegQuality.coerceIn(20, 100), streamOutput)
         // ponytail: one encode per frame — OBS Browser Source scales the cropped JPEG itself
-        return EncodedFrame(streamOutput.toByteArray(), cw, ch)
+        return EncodedFrame(
+            bytes = streamOutput.toByteArray(),
+            width = cw,
+            height = ch,
+            crop =
+                CropWindow(
+                    sourceWidth = width,
+                    sourceHeight = height,
+                    left = cropRect.left,
+                    top = cropRect.top,
+                    width = cropRect.width(),
+                    height = cropRect.height(),
+                ),
+        )
     }
 
     // ponytail: JPEG plus its real dimensions so detection never needs the closed ImageProxy
@@ -490,6 +561,7 @@ class CameraSessionController(context: Context) {
         val bytes: ByteArray,
         val width: Int,
         val height: Int,
+        val crop: CropWindow,
     )
 
     fun focusAt(

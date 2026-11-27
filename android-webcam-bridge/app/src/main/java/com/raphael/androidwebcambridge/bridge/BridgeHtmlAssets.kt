@@ -119,6 +119,9 @@ object BridgeHtmlAssets {
               
               .preview-container { width: 100%; max-width: 1200px; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); position: relative; display: flex; align-items: center; justify-content: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
               .preview-img { width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+              .preview-container.wb-picking { cursor: crosshair; }
+              .wb-picker-hint { display: none; position: absolute; z-index: 5; top: 12px; left: 50%; transform: translateX(-50%); padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.75); color: var(--text); font-size: 12px; pointer-events: none; white-space: nowrap; }
+              .preview-container.wb-picking .wb-picker-hint, .preview-container.wb-feedback .wb-picker-hint { display: block; }
               
               h2 { margin: 0 0 16px; font-size: 12px; font-weight: 700; color: var(--sub); text-transform: uppercase; letter-spacing: 0.1em; }
               .control-group { margin-bottom: 20px; }
@@ -182,6 +185,12 @@ object BridgeHtmlAssets {
                     <label>Zoom Level</label>
                     <span class="value" id="zoomVal">1.0x</span>
                   </div>
+                  <div class="control-header" style="margin-top:12px">
+                    <label for="followStrength">Follow Strength</label>
+                    <span class="value" id="followStrengthVal">70%</span>
+                  </div>
+                  <input id="followStrength" type="range" min="0.1" max="1" step="0.05" value="0.7" aria-label="Follow strength; lower is smoother, higher is faster" />
+                  <div style="font-size:11px;color:var(--sub)">Lower is smoother; higher keeps up with faster movement.</div>
                 </section>
 
                 <section>
@@ -228,6 +237,7 @@ object BridgeHtmlAssets {
                   <div class="face-overlay-container">
                     <div id="faceOverlay" class="face-overlay-inner"></div>
                   </div>
+                  <div id="whiteBalancePickerHint" class="wb-picker-hint" role="status">Click a bright white or neutral area</div>
                 </div>
               </main>
 
@@ -262,6 +272,20 @@ object BridgeHtmlAssets {
                       <span class="value" id="expVal">0</span>
                     </div>
                     <input id="exposure" type="range" min="-6" max="6" step="1" value="0" />
+                  </div>
+
+                  <div class="control-group">
+                    <div class="control-header">
+                      <label for="whiteBalance">White Balance</label>
+                      <div style="display:flex;gap:6px">
+                        <button id="btn-WB-A" style="padding:2px 8px;font-size:10px">Auto</button>
+                        <button id="btn-WB-Pick" type="button" style="padding:2px 8px;font-size:10px">Pick white</button>
+                      </div>
+                    </div>
+                    <div class="control-header">
+                      <span class="value" id="whiteBalanceVal">Auto</span>
+                    </div>
+                    <input id="whiteBalance" type="range" min="2500" max="10000" step="100" value="5500" aria-label="White balance temperature in Kelvin" />
                   </div>
                 </section>
 
@@ -318,6 +342,79 @@ object BridgeHtmlAssets {
               const apiUrl = (path) => path + (path.includes('?') ? '&' : '?') + 'token=__ACCESS_TOKEN__';
               const s = async () => (await fetch(apiUrl('/api/state'))).json();
               const push = async (p) => { await fetch(apiUrl('/api/settings') + '&' + new URLSearchParams(p)); };
+              let whiteBalancePicking = false;
+              const previewContainer = document.getElementById('previewContainer');
+              const whiteBalancePickButton = document.getElementById('btn-WB-Pick');
+              const whiteBalancePickerHint = document.getElementById('whiteBalancePickerHint');
+              const streamImg = document.getElementById('streamImg');
+              const whiteBalanceCanvas = document.createElement('canvas');
+              const whiteBalanceContext = whiteBalanceCanvas.getContext('2d', { willReadFrequently: true });
+
+              whiteBalancePickButton.onclick = () => {
+                whiteBalancePicking = !whiteBalancePicking;
+                previewContainer.classList.toggle('wb-picking', whiteBalancePicking);
+                whiteBalancePickButton.classList.toggle('active', whiteBalancePicking);
+                whiteBalancePickerHint.textContent = whiteBalancePicking
+                  ? 'Click a bright white or neutral area'
+                  : 'Click a bright white or neutral area';
+              };
+
+              previewContainer.addEventListener('click', async (event) => {
+                if (!whiteBalancePicking) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (!streamImg.complete || !streamImg.naturalWidth || !whiteBalanceContext) {
+                  whiteBalancePickerHint.textContent = 'Preview is not ready; click again';
+                  return;
+                }
+
+                const rect = streamImg.getBoundingClientRect();
+                const x = Math.floor((event.clientX - rect.left) / rect.width * streamImg.naturalWidth);
+                const y = Math.floor((event.clientY - rect.top) / rect.height * streamImg.naturalHeight);
+                if (x < 0 || y < 0 || x >= streamImg.naturalWidth || y >= streamImg.naturalHeight) return;
+
+                whiteBalanceCanvas.width = streamImg.naturalWidth;
+                whiteBalanceCanvas.height = streamImg.naturalHeight;
+                whiteBalanceContext.drawImage(streamImg, 0, 0);
+                const left = Math.max(0, x - 3);
+                const top = Math.max(0, y - 3);
+                const width = Math.min(7, streamImg.naturalWidth - left);
+                const height = Math.min(7, streamImg.naturalHeight - top);
+                const pixels = whiteBalanceContext.getImageData(left, top, width, height).data;
+                let red = 0, green = 0, blue = 0, count = 0;
+                for (let i = 0; i < pixels.length; i += 4) {
+                  red += pixels[i];
+                  green += pixels[i + 1];
+                  blue += pixels[i + 2];
+                  count++;
+                }
+                red = Math.round(red / count);
+                green = Math.round(green / count);
+                blue = Math.round(blue / count);
+                if ((red + green + blue) / 3 < 24 || (red + green + blue) / 3 > 245 || green === 0 || blue === 0) {
+                  whiteBalancePickerHint.textContent = 'Choose a brighter white or neutral area';
+                  return;
+                }
+
+                whiteBalancePicking = false;
+                previewContainer.classList.remove('wb-picking');
+                whiteBalancePickButton.classList.remove('active');
+                previewContainer.classList.add('wb-feedback');
+                whiteBalancePickerHint.textContent = 'Applying sampled white balance…';
+                try {
+                  await push({ whiteBalanceSample: [red, green, blue].join(',') });
+                  await updateUI();
+                  whiteBalancePickerHint.textContent = 'White balance locked from sample';
+                  setTimeout(() => {
+                    previewContainer.classList.remove('wb-feedback');
+                    whiteBalancePickerHint.textContent = 'Click a bright white or neutral area';
+                  }, 1800);
+                } catch (_) {
+                  whiteBalancePickerHint.textContent = 'Could not apply white balance; try again';
+                  setTimeout(() => previewContainer.classList.remove('wb-feedback'), 2500);
+                }
+              }, true);
+
               document.getElementById('copyStreamUrl').addEventListener('click', async () => {
                 const text = document.getElementById('streamUrl').textContent.trim();
                 if (!text) return;
@@ -374,6 +471,9 @@ object BridgeHtmlAssets {
                 if (!isInteracting) {
                   document.getElementById('zoom').value = set.zoomRatio;
                   document.getElementById('zoomVal').textContent = set.zoomRatio.toFixed(1) + 'x';
+                  const followStrength = set.faceFollowStrength ?? 0.7;
+                  document.getElementById('followStrength').value = followStrength;
+                  document.getElementById('followStrengthVal').textContent = Math.round(followStrength * 100) + '%';
                   
                   const target = document.getElementById('framingTarget');
                   const z = set.zoomRatio;
@@ -437,6 +537,10 @@ object BridgeHtmlAssets {
                   document.getElementById('shutter').value = set.shutterSpeedMs || 60;
                   document.getElementById('shutterVal').textContent = set.shutterSpeedMs > 0 ? set.shutterSpeedMs + 'ms' : 'Auto';
                   document.getElementById('btn-SH-A').className = set.shutterSpeedMs === 0 ? 'active' : '';
+
+                  document.getElementById('whiteBalance').value = set.whiteBalanceKelvin || 5500;
+                  document.getElementById('whiteBalanceVal').textContent = set.whiteBalanceKelvin > 0 ? set.whiteBalanceKelvin + ' K' : 'Auto';
+                  document.getElementById('btn-WB-A').className = set.whiteBalanceKelvin === 0 ? 'active' : '';
                 }
 
                 document.getElementById('resolution').value = set.resolutionPreset;
@@ -504,6 +608,13 @@ object BridgeHtmlAssets {
                 zoomVal.textContent = next.toFixed(1) + 'x';
                 throttledPush({ zoomRatio: next });
               });
+
+              const followStrength = document.getElementById('followStrength');
+              followStrength.oninput = () => {
+                const strength = Number(followStrength.value);
+                document.getElementById('followStrengthVal').textContent = Math.round(strength * 100) + '%';
+                throttledPush({ faceFollowStrength: strength });
+              };
               
               const framingArea = document.getElementById('framingArea');
               const handleFraming = (e) => {
@@ -581,6 +692,20 @@ object BridgeHtmlAssets {
                 throttledPush({ shutterSpeedMs: shutter.value });
               };
 
+              const whiteBalance = document.getElementById('whiteBalance');
+              const whiteBalanceVal = document.getElementById('whiteBalanceVal');
+              const whiteBalanceAuto = document.getElementById('btn-WB-A');
+              whiteBalance.oninput = () => {
+                whiteBalanceVal.textContent = whiteBalance.value + ' K';
+                whiteBalanceAuto.className = '';
+                throttledPush({ whiteBalanceKelvin: whiteBalance.value });
+              };
+              whiteBalanceAuto.onclick = () => {
+                whiteBalanceVal.textContent = 'Auto';
+                whiteBalanceAuto.className = 'active';
+                push({ whiteBalanceKelvin: 0 }).then(updateUI);
+              };
+
               resolution.onchange = () => push({ resolutionPreset: resolution.value });
               fps.onchange = () => push({ frameRate: fps.value });
 
@@ -597,7 +722,7 @@ object BridgeHtmlAssets {
                 PROW.querySelectorAll('.preset-btn').forEach(b=>{b.onclick=()=>{
                   const snap=loadP()[parseInt(b.dataset.idx)];
                   if(!snap)return;
-                  const q={};['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled'].forEach(k=>{if(snap[k]!==undefined)q[k]=snap[k]});
+                  const q={};['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','whiteBalanceKelvin','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled','faceFollowStrength'].forEach(k=>{if(snap[k]!==undefined)q[k]=snap[k]});
                   push(q).then(updateUI);
                 };b.oncontextmenu=(e)=>{
                   e.preventDefault();
@@ -614,7 +739,7 @@ object BridgeHtmlAssets {
                     if(act==='delete'){all.splice(idx,1);saveP(all);renderP()}
                     if(act==='update'){
                       const snap={},cur=latestSettings||{};
-                      ['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled'].forEach(k=>{if(cur[k]!==undefined)snap[k]=cur[k]});
+                      ['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','whiteBalanceKelvin','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled','faceFollowStrength'].forEach(k=>{if(cur[k]!==undefined)snap[k]=cur[k]});
                       all[idx]={...cur,...snap};saveP(all);renderP();
                     }
                     m.remove();
@@ -624,7 +749,7 @@ object BridgeHtmlAssets {
                 }});              }
               document.getElementById('savePreset').onclick=()=>{
                 const n=prompt('Preset name:');if(!n)return;
-                const p=loadP(),s={};const cur=latestSettings||{};['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled'].forEach(k=>{if(cur[k]!==undefined)s[k]=cur[k]});
+                const p=loadP(),s={};const cur=latestSettings||{};['zoomRatio','focusDistanceDiopters','iso','shutterSpeedMs','exposureCompensation','whiteBalanceKelvin','resolutionPreset','frameRate','selectedCameraId','panX','panY','faceFollowEnabled','faceFollowStrength'].forEach(k=>{if(cur[k]!==undefined)s[k]=cur[k]});
                 p.push({n,...s});saveP(p);renderP();
               };
 

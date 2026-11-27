@@ -86,19 +86,36 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application),
         try {
             val androidKeyStore = KeyStore.getInstance("AndroidKeyStore")
             androidKeyStore.load(null)
-            val alias = "streamcam_server_v3"
+            val alias = "streamcam_server_v6"
             if (!androidKeyStore.containsAlias(alias)) {
                 KeyPairGenerator.getInstance("RSA", "AndroidKeyStore").apply {
                     initialize(
                         KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_DECRYPT)
-                            .setDigests(KeyProperties.DIGEST_SHA256)
-                            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+                            .setDigests(KeyProperties.DIGEST_NONE, KeyProperties.DIGEST_SHA256)
+                            .setEncryptionPaddings(
+                                KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1,
+                                KeyProperties.ENCRYPTION_PADDING_NONE,
+                            )
+                            .setSignaturePaddings(
+                                KeyProperties.SIGNATURE_PADDING_RSA_PKCS1,
+                                KeyProperties.SIGNATURE_PADDING_RSA_PSS,
+                            )
                             .setCertificateSubject(X500Principal("CN=StreamCam Pro"))
                             .setCertificateSerialNumber(BigInteger.ONE)
                             .setKeyValidityEnd(Date(System.currentTimeMillis() + 365L * 24 * 60 * 60 * 1000))
                             .build(),
                     )
                 }.generateKeyPair()
+            }
+            listOf(
+                "streamcam_server_v5",
+                "streamcam_server_v4",
+                "streamcam_server_v3",
+                "streamcam_server",
+            ).forEach { previousAlias ->
+                if (androidKeyStore.containsAlias(previousAlias)) {
+                    androidKeyStore.deleteEntry(previousAlias)
+                }
             }
             val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
             kmf.init(androidKeyStore, null)
@@ -359,29 +376,33 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
-    fun onFacesDetected(faces: List<DetectedFace>) {
+    internal fun onFacesDetected(result: FaceDetectionResult) {
+        val faces = result.faces
         _state.update { current ->
-            var nextPanX = current.settings.panX
-            var nextPanY = current.settings.panY
-
-            if (current.settings.faceFollowEnabled && faces.isNotEmpty()) {
-                val target = faces.find { it.id == current.settings.selectedFaceId } ?: faces.first()
-                nextPanX = (target.x - 0.5f) * 2f
-                nextPanY = (target.y - 0.5f) * 2f
-            }
+            val target =
+                if (current.settings.faceFollowEnabled && faces.isNotEmpty()) {
+                    faces.find { it.id == current.settings.selectedFaceId } ?: faces.first()
+                } else {
+                    null
+                }
+            val targetPan = target?.let { FaceFollowMath.panForFace(it, result.crop) }
+            val nextPan =
+                when {
+                    targetPan != null -> {
+                        cameraController.resumeFaceFollow()
+                        targetPan
+                    }
+                    current.settings.faceFollowEnabled -> cameraController.holdFaceFollowPosition()
+                    else -> FollowPan(current.settings.panX, current.settings.panY)
+                }
 
             current.copy(
                 detectedFaces = faces,
                 settings =
                     current.settings.copy(
-                        panX = nextPanX,
-                        panY = nextPanY,
-                        selectedFaceId =
-                            if (current.settings.faceFollowEnabled && faces.isNotEmpty()) {
-                                (faces.find { it.id == current.settings.selectedFaceId } ?: faces.first()).id
-                            } else {
-                                current.settings.selectedFaceId
-                            },
+                        panX = nextPan.x,
+                        panY = nextPan.y,
+                        selectedFaceId = target?.id ?: current.settings.selectedFaceId,
                     ),
             )
         }
@@ -471,6 +492,12 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application),
         updateSettings(rebind = wasAuto != nowAuto) { it.copy(whiteBalanceKelvin = kelvin) }
     }
 
+    fun setWhiteBalanceFromSample(red: Int, green: Int, blue: Int): Int? {
+        val kelvin = WhiteBalanceMath.temperatureForColor(red, green, blue) ?: return null
+        setWhiteBalanceKelvin(kelvin)
+        return kelvin
+    }
+
     fun setActiveRail(rail: BridgeState.RailType?) {
         _state.update { it.copy(activeRail = rail) }
     }
@@ -508,7 +535,8 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application),
                 val needsRebind =
                     nextSettings.selectedCameraId != current.settings.selectedCameraId ||
                         nextSettings.resolutionPreset != current.settings.resolutionPreset ||
-                        nextSettings.frameRate != current.settings.frameRate
+                        nextSettings.frameRate != current.settings.frameRate ||
+                        (nextSettings.whiteBalanceKelvin == 0) != (current.settings.whiteBalanceKelvin == 0)
 
                 current.copy(
                     settings = nextSettings,

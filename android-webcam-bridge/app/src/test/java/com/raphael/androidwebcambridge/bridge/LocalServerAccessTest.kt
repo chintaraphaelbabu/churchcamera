@@ -63,6 +63,13 @@ class LocalServerAccessTest {
         assertTrue(dashboardPage.contains("/stream.mjpg?token=$token"))
         assertTrue(dashboardPage.contains("token=$token"))
         assertTrue(dashboardPage.contains("id=\"copyStreamUrl\""))
+        assertTrue(
+            dashboardPage.contains(
+                "id=\"whiteBalance\" type=\"range\" min=\"2500\" max=\"10000\" step=\"100\"",
+            ),
+        )
+        assertTrue(dashboardPage.contains("throttledPush({ whiteBalanceKelvin: whiteBalance.value })"))
+        assertTrue(dashboardPage.contains("push({ whiteBalanceKelvin: 0 })"))
         assertTrue(obsBridgePage.contains("/stream.mjpg?token=$token"))
         assertFalse(dashboardPage.contains("__ACCESS_TOKEN__"))
     }

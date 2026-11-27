@@ -19,6 +19,7 @@ class BridgeSettingsTest {
             panX = 0.25f,
             panY = -0.5f,
             faceFollowEnabled = true,
+            faceFollowStrength = 0.65f,
             selectedFaceId = 5,
             exposureCompensation = -2,
             iso = 320,
@@ -55,6 +56,7 @@ class BridgeSettingsTest {
         assertEquals(base.panX, updated.panX, 0f)
         assertEquals(base.panY, updated.panY, 0f)
         assertEquals(base.faceFollowEnabled, updated.faceFollowEnabled)
+        assertEquals(base.faceFollowStrength, updated.faceFollowStrength, 0f)
         assertEquals(base.selectedFaceId, updated.selectedFaceId)
         assertEquals(base.exposureCompensation, updated.exposureCompensation)
         assertEquals(base.shutterSpeedMs, updated.shutterSpeedMs)
@@ -98,6 +100,13 @@ class BridgeSettingsTest {
     }
 
     @Test
+    fun parsesWhiteBalanceAutoValue() {
+        val updated = BridgeSettings.fromQuery(mapOf("whiteBalanceKelvin" to "0"), baseSettings())
+
+        assertEquals(0, updated.whiteBalanceKelvin)
+    }
+
+    @Test
     fun parsesFloatFields() {
         val updated =
             BridgeSettings.fromQuery(
@@ -120,6 +129,28 @@ class BridgeSettingsTest {
         assertEquals(2.25f, updated.focusDistanceDiopters, 0f)
         assertEquals(0.35f, updated.focusVelocity, 0f)
         assertEquals(0.45f, updated.zoomVelocity, 0f)
+    }
+
+    @Test
+    fun parsesAndBoundsFaceFollowStrength() {
+        val base = baseSettings()
+
+        assertEquals(0.7f, BridgeSettings().faceFollowStrength, 0f)
+        assertEquals(
+            0.8f,
+            BridgeSettings.fromQuery(mapOf("faceFollowStrength" to "0.8"), base).faceFollowStrength,
+            0f,
+        )
+        assertEquals(
+            0.1f,
+            BridgeSettings.fromQuery(mapOf("faceFollowStrength" to "-1"), base).faceFollowStrength,
+            0f,
+        )
+        assertEquals(
+            1f,
+            BridgeSettings.fromQuery(mapOf("faceFollowStrength" to "2"), base).faceFollowStrength,
+            0f,
+        )
     }
 
     @Test
@@ -274,6 +305,22 @@ class BridgeSettingsTest {
     // ---- resolutionPreset --------------------------------------------------
 
     @Test
+    fun resolutionPresetDefaultsTo1080p() {
+        assertEquals(ResolutionPreset.P1080, BridgeSettings().resolutionPreset)
+    }
+
+    @Test
+    fun whiteBalanceSampleSetsManualTemperature() {
+        val updated =
+            BridgeSettings.fromQuery(
+                mapOf("whiteBalanceSample" to "255,220,180"),
+                baseSettings().copy(whiteBalanceKelvin = 0),
+            )
+
+        assertTrue(updated.whiteBalanceKelvin in 2500..10000)
+    }
+
+    @Test
     fun resolutionPresetParsesKnownName() {
         val updated = BridgeSettings.fromQuery(mapOf("resolutionPreset" to "P4K"), baseSettings())
         assertEquals(ResolutionPreset.P4K, updated.resolutionPreset)
@@ -311,6 +358,7 @@ class BridgeSettingsTest {
                     "shutterSpeedMs" to "30",
                     "zoomRatio" to "2.0",
                     "faceFollowEnabled" to "true",
+                    "faceFollowStrength" to "0.8",
                     "selectedFaceId" to "3",
                     "focusAuto" to "false",
                     "frameRate" to "25",
@@ -325,6 +373,7 @@ class BridgeSettingsTest {
         assertEquals(30, updated.shutterSpeedMs)
         assertEquals(2.0f, updated.zoomRatio, 0f)
         assertTrue(updated.faceFollowEnabled)
+        assertEquals(0.8f, updated.faceFollowStrength, 0f)
         assertEquals(3, updated.selectedFaceId)
         assertFalse(updated.focusAuto)
         assertEquals(25, updated.frameRate)

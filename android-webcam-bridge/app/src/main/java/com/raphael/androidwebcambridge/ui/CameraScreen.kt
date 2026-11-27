@@ -2,6 +2,7 @@ package com.raphael.androidwebcambridge.ui
 
 import android.Manifest
 import android.app.Activity
+import android.graphics.Bitmap
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -102,6 +103,8 @@ fun CameraScreen() {
     var showRightDrawer by remember { mutableStateOf(false) }
     var focusPeakingEnabled by remember { mutableStateOf(false) }
     var showGrid by remember { mutableStateOf(false) }
+    var pickingWhiteBalance by remember { mutableStateOf(false) }
+    var whiteBalancePickerFeedback by remember { mutableStateOf<String?>(null) }
     val focusPeakingBitmap = remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var focusPos by remember { mutableStateOf<Offset?>(null) }
     var focusLocked by remember { mutableStateOf(false) }
@@ -267,6 +270,44 @@ fun CameraScreen() {
         }
     }
 
+    fun sampleWhiteBalance(x: Float, y: Float) {
+        val bitmap: Bitmap? = previewView.bitmap
+        if (bitmap == null || previewView.width == 0 || previewView.height == 0) {
+            whiteBalancePickerFeedback = "Preview unavailable; tap again"
+            return
+        }
+
+        val centerX = (x * bitmap.width / previewView.width).toInt().coerceIn(0, bitmap.width - 1)
+        val centerY = (y * bitmap.height / previewView.height).toInt().coerceIn(0, bitmap.height - 1)
+        var red = 0
+        var green = 0
+        var blue = 0
+        var samples = 0
+        for (sampleY in (centerY - 3).coerceAtLeast(0)..(centerY + 3).coerceAtMost(bitmap.height - 1)) {
+            for (sampleX in (centerX - 3).coerceAtLeast(0)..(centerX + 3).coerceAtMost(bitmap.width - 1)) {
+                val color = bitmap.getPixel(sampleX, sampleY)
+                red += android.graphics.Color.red(color)
+                green += android.graphics.Color.green(color)
+                blue += android.graphics.Color.blue(color)
+                samples++
+            }
+        }
+
+        val kelvin =
+            viewModel.setWhiteBalanceFromSample(
+                red / samples,
+                green / samples,
+                blue / samples,
+            )
+        if (kelvin == null) {
+            whiteBalancePickerFeedback = "Choose a brighter white or neutral area"
+            return
+        }
+
+        pickingWhiteBalance = false
+        whiteBalancePickerFeedback = "White balance locked at ${kelvin}K"
+    }
+
     Box(
         modifier =
             Modifier
@@ -308,6 +349,10 @@ fun CameraScreen() {
                         detectTapGestures(
                             onTap = { offset ->
                                 touchRest()
+                                if (pickingWhiteBalance) {
+                                    sampleWhiteBalance(offset.x, offset.y)
+                                    return@detectTapGestures
+                                }
                                 viewModel.setActiveRail(null)
                                 // ponytail: tap to focus, no lock — lock via focus rail if needed
                                 viewModel.focusAt(offset.x, offset.y, previewView.meteringPointFactory)
@@ -325,6 +370,28 @@ fun CameraScreen() {
                     },
             factory = { previewView },
         )
+
+        LaunchedEffect(whiteBalancePickerFeedback) {
+                    if (whiteBalancePickerFeedback != null) {
+                        delay(2500)
+                        whiteBalancePickerFeedback = null
+                    }
+        }
+        if (pickingWhiteBalance || whiteBalancePickerFeedback != null) {
+                    Text(
+                        text =
+                            whiteBalancePickerFeedback
+                                ?: "Tap a bright white or neutral area",
+                        color = Color.White,
+                        modifier =
+                            Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 72.dp)
+                                .background(Color.Black.copy(alpha = 0.7f))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        fontSize = 13.sp,
+                    )
+        }
 
         // Focus peaking red edge overlay
         focusPeakingBitmap.value?.let { img ->
@@ -507,6 +574,23 @@ fun CameraScreen() {
                                                 inactiveTrackColor = Color.Black.copy(alpha = 0.2f),
                                             ),
                                     )
+                                    Surface(
+                                        color = Color(0xFF202020),
+                                        shape = RectangleShape,
+                                        modifier =
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .height(40.dp)
+                                                .clickable {
+                                                    pickingWhiteBalance = true
+                                                    whiteBalancePickerFeedback = null
+                                                    activeControl = null
+                                                },
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text("Pick white from preview", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                                        }
+                                    }
                                 }
                             }
                         }
