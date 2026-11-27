@@ -1,7 +1,7 @@
 package com.raphael.androidwebcambridge.bridge
 
 object BridgeHtmlAssets {
-    fun obsBridgePage(): String =
+    fun obsBridgePage(accessToken: String): String =
         """
         <!doctype html>
         <html>
@@ -23,7 +23,7 @@ object BridgeHtmlAssets {
                 <div id="dot"></div>
                 <div id="status-text">BRIDGE READY</div>
             </div>
-            <img src="/stream.mjpg" style="width: 100vw; height: 100vh; object-fit: contain;" />
+            <img src="/stream.mjpg?token=__ACCESS_TOKEN__" style="width: 100vw; height: 100vh; object-fit: contain;" />
             <script>
               let _isVisible = false;
               let _isActive = false;
@@ -53,7 +53,7 @@ object BridgeHtmlAssets {
                 if (_debounce) clearTimeout(_debounce);
                 _debounce = setTimeout(() => {
                   if (_lastSent !== state) {
-                    fetch('/api/tally?tallyState=' + state + '&_t=' + Date.now()).catch(() => {});
+                    fetch('/api/tally?token=__ACCESS_TOKEN__&tallyState=' + state + '&_t=' + Date.now()).catch(() => {});
                     _lastSent = state;
                   }
                   _debounce = null;
@@ -78,23 +78,22 @@ object BridgeHtmlAssets {
             </script>
           </body>
         </html>
-        """.trimIndent()
+        """.trimIndent().replace("__ACCESS_TOKEN__", accessToken)
 
-    fun landingPage(): String =
+    fun landingPage(accessToken: String): String =
         """
         <!doctype html>
         <html>
           <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>StreamCam Pro</title></head>
           <body style="font-family:sans-serif;padding:24px;background:#081018;color:#eff6ff;">
             <h1>StreamCam Pro</h1>
-            <p>Open <a href="/dashboard" style="color:#4ade80">/dashboard</a> for controls.</p>
-            <p>OBS browser source: <code>/stream.mjpg</code></p>
-            <p>API: <code>/api/state</code></p>
+            <p>Open <a href="/dashboard?token=__ACCESS_TOKEN__" style="color:#4ade80">/dashboard</a> for controls.</p>
+            <p>OBS browser source URL: <code>/stream.mjpg?token=__ACCESS_TOKEN__</code></p>
           </body>
         </html>
-        """.trimIndent()
+        """.trimIndent().replace("__ACCESS_TOKEN__", accessToken)
 
-    fun dashboardPage(): String =
+    fun dashboardPage(accessToken: String): String =
         """
         <!doctype html>
         <html>
@@ -225,7 +224,7 @@ object BridgeHtmlAssets {
                 </div>
 
                 <div class="preview-container" id="previewContainer">
-                  <img src="/stream.mjpg" class="preview-img" id="streamImg" alt="Live Preview" />
+                  <img src="/stream.mjpg?token=__ACCESS_TOKEN__" class="preview-img" id="streamImg" alt="Live Preview" />
                   <div class="face-overlay-container">
                     <div id="faceOverlay" class="face-overlay-inner"></div>
                   </div>
@@ -308,14 +307,40 @@ object BridgeHtmlAssets {
                   </section>
 
                 <div style="margin-top:auto; font-size:11px; color:var(--sub); opacity:0.5">
-                  Stream: <code>/stream.mjpg</code>
+                  OBS Stream URL: <code id="streamUrl" style="user-select:all"></code>
+                  <button id="copyStreamUrl" type="button">Copy URL</button>
+                  <span id="copyStreamUrlStatus" aria-live="polite"></span>
                 </div>
               </aside>
             </div>
 
             <script>
-              const s = async () => (await fetch('/api/state')).json();
-              const push = async (p) => { await fetch('/api/settings?' + new URLSearchParams(p)); };
+              const apiUrl = (path) => path + (path.includes('?') ? '&' : '?') + 'token=__ACCESS_TOKEN__';
+              const s = async () => (await fetch(apiUrl('/api/state'))).json();
+              const push = async (p) => { await fetch(apiUrl('/api/settings') + '&' + new URLSearchParams(p)); };
+              document.getElementById('copyStreamUrl').addEventListener('click', async () => {
+                const text = document.getElementById('streamUrl').textContent.trim();
+                if (!text) return;
+                const status = document.getElementById('copyStreamUrlStatus');
+                try {
+                  if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                  } else {
+                    const input = document.createElement('textarea');
+                    input.value = text;
+                    input.style.position = 'fixed';
+                    input.style.opacity = '0';
+                    document.body.appendChild(input);
+                    input.select();
+                    const copied = document.execCommand('copy');
+                    input.remove();
+                    if (!copied) throw new Error('Copy unavailable');
+                  }
+                  status.textContent = 'Copied';
+                } catch (_) {
+                  status.textContent = 'Select and copy the URL';
+                }
+              });
               let latestSettings = null;
               
               let lastLocalInteraction = 0;
@@ -332,6 +357,8 @@ object BridgeHtmlAssets {
               const updateUI = async () => {
                 const now = Date.now();
                 const state = await s();
+                const streamUrlEl = document.getElementById('streamUrl');
+                if (streamUrlEl) streamUrlEl.textContent = state.streamUrl || '';
                 const set = state.settings;
                 latestSettings = set;
                 
@@ -617,7 +644,7 @@ object BridgeHtmlAssets {
 
               // ponytail: sequential AudioBufferSourceNode scheduling, ring buffer if glitches persist
               let ac = null, nextTime = 0, pttStream = null, pttNode = null, audioSendChain = Promise.resolve();
-              const audioEs = new EventSource('/api/audio/out');
+              const audioEs = new EventSource(apiUrl('/api/audio/out'));
               audioEs.onmessage = e => {
                 if (pttNode) return; // ponytail: skip own echo while transmitting
                 (ac || (ac = new AudioContext({sampleRate:44100}))).resume();
@@ -653,7 +680,7 @@ object BridgeHtmlAssets {
                     const bytes = new Uint8Array(pcm.buffer);
                     const packet = encodeURIComponent(btoa(String.fromCharCode(...bytes)));
                     audioSendChain = audioSendChain
-                      .then(() => fetch('/api/audio/in?d=' + packet))
+                      .then(() => fetch(apiUrl('/api/audio/in') + '&d=' + packet))
                       .catch(e => console.error('audio-send', e));
                   };
                   src.connect(pttNode); pttNode.connect(ac.destination);
@@ -672,5 +699,5 @@ object BridgeHtmlAssets {
             </script>
           </body>
         </html>
-        """.trimIndent()
+        """.trimIndent().replace("__ACCESS_TOKEN__", accessToken)
 }

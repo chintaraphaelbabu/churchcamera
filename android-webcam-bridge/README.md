@@ -33,7 +33,8 @@ This project turns your Android phone into a remote-controlled webcam for OBS an
 - **OBS**: Intercom audio is not routed into OBS as an audio source by default.
 
 ### 6. Streaming
-- **MJPEG Output**: The actual transport is MJPEG over HTTP at `/stream.mjpg`, compatible with OBS "Browser Source".
+- **MJPEG Output**: The actual transport is MJPEG over HTTP at `/stream.mjpg`, compatible with OBS "Browser Source". The stream URL includes an access token and must be copied from the phone's connection details or the dashboard's **Copy URL** button.
+- **LAN access**: Dashboard, API, and stream requests require the per-install token in the URL. Treat copied URLs as credentials; anyone with one can control the phone and view its stream. The relay registration record intentionally contains no token.
 - **Single JPEG encode**: Each frame is JPEG-encoded once at the crop size and sent directly; OBS scales it. Output dimensions follow the crop (`cw x ch`), while the resolution preset sets the analysis target resolution.
 - **Background streaming**: Camera analysis is bound to the ViewModel's process lifetime; only the preview detaches when the Activity stops. Home or screen-off keeps MJPEG and tally alive. Process death, OEM battery killers, missing notification permission, and some camera HALs can still interrupt it (see [problems.md](problems.md)).
 - **Ports**: Plain HTTP on `8787`; HTTPS on `8788` when TLS is available.
@@ -52,15 +53,28 @@ The app requires the following runtime permissions:
 - **Camera**: Required for video streaming.
 - **Record Audio**: Required for Push-to-Talk intercom.
 
+## Building release APKs
+
+Debug builds need no signing credentials. Release builds require a private keystore supplied outside the repository. Provide all four values as Gradle properties or environment variables:
+
+- `RELEASE_STORE_FILE`: keystore path (resolved relative to `android-webcam-bridge/app` unless absolute)
+- `RELEASE_STORE_PASSWORD`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSWORD`
+
+For local builds, put these properties in your user-level Gradle properties file (`~/.gradle/gradle.properties`), not in the repository. CI can supply the same names as protected environment variables. Release tasks fail with the missing property names if credentials are not configured.
+
+The app's HTTPS server does not use the release keystore: it creates a per-install certificate in AndroidKeyStore at runtime.
+
 ## How to use
 
 1.  Open the app on your Android phone and grant camera and microphone permissions.
 2.  Open the **Settings** panel to find your local IP address.
-3.  On your laptop, go to `http://<phone-ip>:8787/dashboard` (or `https://<phone-ip>:8788/dashboard` when TLS is available).
-4.  In OBS, add a **Browser Source** pointing to `http://<phone-ip>:8787/stream.mjpg`. Use `https://<phone-ip>:8788/stream.mjpg` only when TLS is available.
+3.  Open the **Dashboard URL** shown in the phone's connection details (for example, `http://<phone-ip>:8787/dashboard?token=<access-token>`; use port `8788` and `https` when TLS is available). It includes the access token required for LAN access.
+4.  In OBS, add a **Browser Source** using the full **OBS Stream URL** copied from the phone's connection details or dashboard (for example, `http://<phone-ip>:8787/stream.mjpg?token=<access-token>`). Keep the tokenized URL private.
 5.  Use the **Hold to Speak** buttons on both the phone and dashboard for two-way audio intercom.
 
-For tally, open the dashboard's **Relay** section and enter the relay host. Source names are matched automatically: the relay maps each OBS Browser Source URL hostname to the phone with the same callback URL hostname, and the admin page shows an `AUTO` badge. If no source matches, the admin page shows an amber hint; set **Source Name** manually in the dashboard as the fallback.
+For tally, open the dashboard's **Relay** section and enter the relay host, or leave it blank for automatic discovery. The relay advertises `_churchcam._tcp.local` with DNS-SD; Android resolves it through the platform NSD API. UDP broadcast on port `9999` remains a fallback. Source names are matched automatically: the relay maps each OBS Browser Source URL hostname to the phone with the same callback URL hostname, and the admin page shows an `AUTO` badge. If no source matches, the admin page shows an amber hint; set **Source Name** manually in the dashboard as the fallback.
 
 Streaming continues when the app is backgrounded or the screen is off: camera analysis is bound to the ViewModel's process lifetime, only the preview detaches from the Activity, and a foreground service with a Stop action keeps the process alive. See [problems.md](problems.md) for remaining caveats (process death, OEM battery killers, notification permission, camera HAL behavior).
 

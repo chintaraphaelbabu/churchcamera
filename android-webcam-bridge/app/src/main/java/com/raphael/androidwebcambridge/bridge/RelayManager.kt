@@ -38,7 +38,7 @@ class RelayManager(
     @Volatile
     private var tallyWsReconnectEnabled = true
     private val discovery =
-        RelayDiscovery { relayUrl ->
+        RelayDiscovery(context) { relayUrl ->
             if (getRelayHost().isNullOrBlank()) {
                 onDiscoveryStatus("Found: $relayUrl")
                 setRelayHost(relayUrl)

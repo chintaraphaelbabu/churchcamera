@@ -48,6 +48,16 @@ import javax.security.auth.x500.X500Principal
 class BridgeViewModel(application: Application) : AndroidViewModel(application), LifecycleOwner {
     private val app: Application = application
     private val prefs = application.getSharedPreferences("bridge_prefs", Context.MODE_PRIVATE)
+    private val accessTokenPrefs = application.getSharedPreferences("local_server_auth", Context.MODE_PRIVATE)
+    private val accessToken =
+        AccessTokenStore(
+            readToken = { accessTokenPrefs.getString("access_token", null) },
+            persistToken = { token ->
+                check(accessTokenPrefs.edit().putString("access_token", token).commit()) {
+                    "Unable to persist the local server access token"
+                }
+            },
+        ).getOrCreate()
     private var networkCallbackRegistered = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -74,15 +84,6 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application),
 
     private val sslContext: SSLContext? by lazy {
         try {
-            val resId = app.resources.getIdentifier("keystore", "raw", app.packageName)
-            if (resId != 0) {
-                val ks = KeyStore.getInstance("PKCS12")
-                app.resources.openRawResource(resId).use { stream -> ks.load(stream, "changeit".toCharArray()) }
-                val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-                kmf.init(ks, "changeit".toCharArray())
-                return@lazy SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
-            }
-
             val androidKeyStore = KeyStore.getInstance("AndroidKeyStore")
             androidKeyStore.load(null)
             val alias = "streamcam_server_v3"
@@ -111,6 +112,7 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application),
     private val server =
         LocalBridgeServer(
             sslContext = sslContext,
+            accessToken = accessToken,
             onRemoteUpdate = ::applyRemoteUpdate,
             onConnectionStatusChanged = ::updateClientCount,
         )
@@ -573,8 +575,8 @@ class BridgeViewModel(application: Application) : AndroidViewModel(application),
                     serverRunning = true,
                     statusMessage = "Server started",
                     localIpAddress = ip,
-                    dashboardUrl = "$proto://$ip:$dashboardPort/dashboard",
-                    streamUrl = "$proto://$ip:$dashboardPort/stream.mjpg",
+                    dashboardUrl = withAccessToken("$proto://$ip:$dashboardPort/dashboard", accessToken),
+                    streamUrl = withAccessToken("$proto://$ip:$dashboardPort/stream.mjpg", accessToken),
                 )
             }
             server.updateState(_state.value)

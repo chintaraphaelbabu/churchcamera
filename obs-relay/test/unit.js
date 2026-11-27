@@ -13,8 +13,28 @@ const {
   isDeviceFresh,
   buildDeviceRecord,
 } = require('../lib/pure');
+const { publishRelayService } = require('../lib/discovery');
 
 const SOURCE_NAME = 'Browser Full';
+
+test('publishRelayService advertises the relay as a TCP DNS-SD service', () => {
+  let publishedOptions;
+  const expectedService = { fqdn: 'ChurchCam Relay._churchcam._tcp.local', port: 3000 };
+  const bonjour = {
+    publish(options) {
+      publishedOptions = options;
+      return expectedService;
+    },
+  };
+
+  assert.equal(publishRelayService(bonjour, '3000'), expectedService);
+  assert.deepEqual(publishedOptions, {
+    name: 'ChurchCam Relay',
+    type: 'churchcam',
+    protocol: 'tcp',
+    port: 3000,
+  });
+});
 
 test('normalizeObsUrl adds ws:// only when no ws/wss scheme is present', () => {
   assert.equal(normalizeObsUrl('localhost:4455'), 'ws://localhost:4455');

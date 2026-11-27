@@ -1,4 +1,4 @@
-// ponytail: smoke test — relay starts, /api/devices responds 200, register is tracked
+// Smoke test for relay readiness, registration, and reported RTT-derived latency.
 const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -164,19 +164,14 @@ async function main() {
 
   console.log('PASS: /api/devices returned 200, device exists, latencyMs=', device.latencyMs);
 
-  // Assert latency tracked and under 100ms (rtt 80 => latencyMs = 40)
+  // This checks the relay's RTT-derived metric, not end-to-end video latency.
   const latencyMs = device.latencyMs;
-  if (typeof latencyMs !== 'number' || !Number.isFinite(latencyMs)) {
-    console.log('FAIL: latencyMs not tracked', device);
+  if (latencyMs !== 40) {
+    console.log('FAIL: expected derived latencyMs=40 for supplied rtt=80, got', latencyMs);
     finish(1);
     return;
   }
-  if (latencyMs >= 100) {
-    console.log('FAIL: latencyMs >= 100ms', latencyMs);
-    finish(1);
-    return;
-  }
-  console.log(`PASS: latency verified < 100ms (tracked, rtt 80 => ${latencyMs}ms)`);
+  console.log('PASS: /api/devices reports latencyMs=40 for supplied rtt=80');
 
   finish(0);
 }

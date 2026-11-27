@@ -22,11 +22,17 @@ class SmokeTest {
         assertTrue(label.isNotBlank())
     }
 
+
+
     @Test
-    fun latencyUnder100msVerified() {
-        // Verify relay.js latencyMs tracking: rtt -> latencyMs = rtt / 2
-        val rtt = 80
-        val latencyMs = rtt / 2
-        assertTrue("Latency must be < 100ms (was $latencyMs ms)", latencyMs < 100)
+    fun relayUrlUsesResolvedDnsSdAddressAndPort() {
+        assertEquals("http://192.168.1.25:3000", relayUrlForAddress("192.168.1.25", 3000))
+        assertEquals("http://[fe80::1234%25wlan0]:3000", relayUrlForAddress("fe80::1234%wlan0", 3000))
+    }
+
+    @Test
+    fun relayUrlRejectsMissingAddressOrInvalidPort() {
+        assertEquals(null, relayUrlForAddress(null, 3000))
+        assertEquals(null, relayUrlForAddress("192.168.1.25", 0))
     }
 }

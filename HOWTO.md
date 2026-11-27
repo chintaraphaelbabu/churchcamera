@@ -35,9 +35,9 @@ In OBS:
 - open the websocket server settings
 - make sure the server is enabled
 - confirm the port is `4455`
-- note the Browser Source URLs you want to track (each should point at a phone's `/stream.mjpg`)
+- copy each phone's authenticated OBS Stream URL from its **Connection Details** drawer
 
-Each OBS Browser Source should point at a phone's own `/stream.mjpg` URL. The relay matches the phone and source by URL hostname, so you do not need to pre-configure the source names in the phone dashboard.
+Each OBS Browser Source should use that phone's full authenticated OBS Stream URL, including its `token` query parameter. The relay matches the phone and source by URL hostname, so you do not need to pre-configure the source names in the phone dashboard.
 
 ## 2. Start the relay
 
@@ -115,7 +115,7 @@ Repeat the same registration steps on each additional phone:
 
 1. Open the phone dashboard.
 2. Set the same relay host and tap **Save**.
-3. Make sure that phone has its own OBS Browser Source pointing at its `/stream.mjpg` URL. Source names are auto-matched by hostname; set a **Source Name** manually only if the admin page shows the amber hint.
+3. Make sure that phone has its own OBS Browser Source pointing at the authenticated OBS Stream URL from its **Connection Details** drawer. Source names are auto-matched by hostname; set a **Source Name** manually only if the admin page shows the amber hint.
 4. Leave the app running so the heartbeat keeps it fresh.
 
 The relay sends tally updates to the matching registered phone for each source name.
@@ -123,7 +123,7 @@ That means phone1 can follow source `phone1` and phone2 can follow source `phone
 
 Important:
 
-- give each phone its own OBS Browser Source pointing at that phone's `/stream.mjpg`
+- give each phone its own OBS Browser Source pointing at that phone's authenticated OBS Stream URL
 - register each phone separately on the relay (automatic when it saves the relay host)
 - rely on auto-matching, or set the matching source name manually in that phone's dashboard if no source matched
 

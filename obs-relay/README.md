@@ -13,6 +13,7 @@ Each device stores its own `sourceName`. The relay auto-matches a phone to an OB
 ## Components
 
 - `relay.js` - main relay process, OBS connection, tally evaluation, relay WebSocket, discovery
+- `lib/discovery.js` - DNS-SD service advertisement configuration
 - `lib/pure.js` - pure helpers for URL/hostname matching, device records, and freshness
 - `test/unit.js`, `test/smoke.js` - unit and smoke tests run by `npm test`
 - `admin/index.html` - single-page status UI: OBS connection/scene, device cards (tally, latency, battery), director push-to-talk, stream links
@@ -28,6 +29,7 @@ Each device stores its own `sourceName`. The relay auto-matches a phone to an OB
 4. For each fresh device it checks whether the device's source name is present and enabled in Program and Preview.
 5. The phone opens a WebSocket at `/tally` and sends `{"type":"auth","deviceId":"..."}`. The relay upserts the device from that message and pushes tally updates over the socket.
 6. The relay also accepts `POST /api/register` and `POST /api/ping`; the phone heartbeats every 10 seconds. A heartbeat that only sends the Android model does not overwrite an auto-matched source name.
+7. The relay advertises its HTTP endpoint as a DNS-SD `_churchcam._tcp.local` service using the configured admin port. Android discovers and resolves this service through the platform NSD API; UDP broadcast on port `9999` remains as a fallback.
 
 A device is considered stale after 10 seconds without a ping (`DEVICE_STALE_MS`). Devices are removed after 5 minutes without a ping (`DEVICE_GC_AGE_MS`).
 
@@ -44,7 +46,7 @@ If a TLS certificate exists at `TLS_PFX` (default `certs/relay.p12`), the same a
 The page shows:
 
 - OBS connection state and current Program/Preview scene
-- One card per registered phone: tally state, latency, battery, and a link to that phone's `/stream.mjpg`
+- One card per registered phone: tally state, latency, and battery. The authenticated stream URL stays on the phone and is copied from its Connection Details drawer.
 - An `AUTO` badge when the relay matched the phone to an OBS Browser Source by URL hostname, or an amber "set source name in phone dashboard" hint when nothing matched
 - A director push-to-talk button that sends audio to all connected phones
 

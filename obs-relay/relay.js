@@ -4,6 +4,7 @@ const https = require('https');
 const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
+const { Bonjour } = require('bonjour-service');
 const {
   normalizeObsUrl,
   summarizeSceneMatch,
@@ -14,6 +15,7 @@ const {
   isDeviceFresh,
   buildDeviceRecord,
 } = require('./lib/pure');
+const { publishRelayService } = require('./lib/discovery');
 
 const OBS_ADDRESS = process.env.OBS_ADDRESS || 'ws://localhost:4455';
 const OBS_PASSWORD = process.env.OBS_PASSWORD || '';
@@ -717,25 +719,12 @@ setInterval(() => {
 }, 2000);
 console.log(`UDP broadcast on port ${BROADCAST_PORT}: ${discoveryPayload}`);
 
-// ponytail: basic mDNS advertisement for _churchcam._tcp (manual multicast, no extra deps)
-const mdnsPort = 5353;
-const mdnsMulticast = '224.0.0.251';
 try {
-  const mdnsSocket = dgram.createSocket('udp4');
-  mdnsSocket.on('error', (e) => console.warn('mDNS socket error', e.message));
-  mdnsSocket.bind(() => {
-    mdnsSocket.setBroadcast(true);
-    mdnsSocket.addMembership(mdnsMulticast);
-    setInterval(() => {
-      const ptrRecord = Buffer.from(`_churchcam._tcp.local. PTR churchcam._tcp.local.`);
-      mdnsSocket.send(ptrRecord, 0, ptrRecord.length, mdnsPort, mdnsMulticast, (err) => {
-        if (err) console.warn('mDNS send error', err.message);
-      });
-    }, 2000);
-    console.log(`mDNS advertisement on ${mdnsMulticast}:${mdnsPort}: _churchcam._tcp`);
-  });
+  const bonjour = new Bonjour({}, (e) => console.warn('mDNS error', e.message));
+  const service = publishRelayService(bonjour, ADMIN_PORT);
+  console.log(`DNS-SD service advertised: ${service.fqdn} on port ${service.port}`);
 } catch (e) {
-  console.warn('mDNS advertisement failed:', e.message);
+  console.warn('DNS-SD advertisement failed:', e.message);
 }
 
 // ponytail: top-level error boundary — log, don't crash

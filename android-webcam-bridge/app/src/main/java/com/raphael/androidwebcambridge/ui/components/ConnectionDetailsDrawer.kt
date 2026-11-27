@@ -4,8 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +53,8 @@ fun ConnectionDetailsDrawer(
         )
 
         ConnectionField(label = "Local IP Address", value = state.localIpAddress.ifBlank { "Unknown" })
+        ConnectionField(label = "Dashboard URL", value = state.dashboardUrl)
+        ConnectionField(label = "OBS Stream URL", value = state.streamUrl)
 
         Column(modifier = Modifier.padding(vertical = 8.dp)) {
             Text(text = "Tally IP Address", color = Color(0xFF666666), style = MaterialTheme.typography.bodySmall)
@@ -214,7 +217,9 @@ private fun ConnectionField(
                     .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            Text(text = value, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            SelectionContainer {
+                Text(text = value, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }

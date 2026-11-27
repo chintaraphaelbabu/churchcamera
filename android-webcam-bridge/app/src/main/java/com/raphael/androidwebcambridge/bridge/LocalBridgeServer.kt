@@ -29,9 +29,14 @@ class LocalBridgeServer(
     private val port: Int = 8787,
     private val securePort: Int = 8788,
     sslContext: SSLContext? = null,
+    private val accessToken: String,
     private val onRemoteUpdate: (Map<String, String?>) -> Unit,
     private val onConnectionStatusChanged: (total: Int) -> Unit,
 ) {
+    init {
+        require(accessToken.isNotBlank()) { "Server access token must not be blank" }
+    }
+
     companion object {
         private const val TAG = "LocalBridge"
     }
@@ -148,13 +153,21 @@ class LocalBridgeServer(
                     if (headerLine.isBlank()) break
                 }
 
+                if (LocalBridgeAuthorization.requiresAuthorization(uri) &&
+                    !LocalBridgeAuthorization.hasValidAccessToken(accessToken, query["token"])
+                ) {
+                    writeText(output, "Unauthorized", "text/plain; charset=utf-8", code = 401)
+                    return@use
+                }
+                val updateParameters = query - "token"
+
                 when {
-                    uri == "/" -> writeText(output, BridgeHtmlAssets.landingPage(), "text/html; charset=utf-8")
-                    uri == "/dashboard" -> writeText(output, BridgeHtmlAssets.dashboardPage(), "text/html; charset=utf-8")
-                    uri == "/obs-bridge" -> writeText(output, BridgeHtmlAssets.obsBridgePage(), "text/html; charset=utf-8")
+                    uri == "/" -> writeText(output, BridgeHtmlAssets.landingPage(accessToken), "text/html; charset=utf-8")
+                    uri == "/dashboard" -> writeText(output, BridgeHtmlAssets.dashboardPage(accessToken), "text/html; charset=utf-8")
+                    uri == "/obs-bridge" -> writeText(output, BridgeHtmlAssets.obsBridgePage(accessToken), "text/html; charset=utf-8")
                     uri == "/api/state" -> writeText(output, currentState.get().toJson().toString(), "application/json; charset=utf-8")
                     uri == "/api/tally" -> {
-                        scope.launch { onRemoteUpdate(query) }
+                        scope.launch { onRemoteUpdate(updateParameters) }
                         writeText(
                             output,
                             JSONObject().put("ok", true).put("message", "tally updated").toString(),
@@ -162,7 +175,7 @@ class LocalBridgeServer(
                         )
                     }
                     uri == "/api/settings" -> {
-                        scope.launch { onRemoteUpdate(query) }
+                        scope.launch { onRemoteUpdate(updateParameters) }
                         writeText(
                             output,
                             JSONObject().put("ok", true).put("message", "settings updated").toString(),
@@ -261,6 +274,7 @@ class LocalBridgeServer(
         val statusText =
             when (code) {
                 200 -> "OK"
+                401 -> "Unauthorized"
                 404 -> "Not Found"
                 else -> "Error"
             }
@@ -274,6 +288,8 @@ class LocalBridgeServer(
                 append("Content-Type: ")
                 append(contentType)
                 append("\r\n")
+                append("Cache-Control: no-store\r\n")
+                append("Referrer-Policy: no-referrer\r\n")
                 append("Content-Length: ")
                 append(body.toByteArray(StandardCharsets.UTF_8).size)
                 append("\r\n")
@@ -317,6 +333,7 @@ class LocalBridgeServer(
                         wsKey = line.substring(colonIndex + 1).trim()
                     }
                 }
+
             }
             val acceptHash = java.util.Base64.getEncoder().encodeToString(
                 java.security.MessageDigest.getInstance("SHA-1").digest(

@@ -20,7 +20,7 @@ Android phone → professional OBS camera with tally, remote control, and focus 
 - **Background streaming**: camera analysis runs on the ViewModel's process lifetime, so MJPEG and tally continue with the app in the background or the screen off (see the caveats in `problems.md`)
 
 ### Streaming & OBS
-- **MJPEG stream** at `/stream.mjpg` on plain HTTP port 8787. When TLS is available it is also served on HTTPS port 8788.
+- **Authenticated MJPEG stream** at `/stream.mjpg` on plain HTTP port 8787 and HTTPS port 8788 when TLS is available. The per-install token is included in the OBS Stream URL shown in the phone app.
 - **Frame delivery**: each client receives each new frame once; slow clients skip intermediate frames instead of queuing duplicates.
 - **OBS connects directly to the phone**; the relay does not proxy video.
 - **Tally bridge**: OBS scene events → relay → phone; borders turn red (PROGRAM), yellow (PREVIEW), green (IDLE)
@@ -30,7 +30,7 @@ Android phone → professional OBS camera with tally, remote control, and focus 
 
 ### Remote Control
 - **Phone web dashboard** at `http://<phone-ip>:8787/dashboard` (or `https://<phone-ip>:8788/dashboard` when TLS is available): live preview, camera settings, relay host, and OBS source name
-- **Relay admin panel** at `http://localhost:3000`: OBS connection/scene status, device cards with tally/latency/battery, a director push-to-talk button, and a link to each phone's `/stream.mjpg`. It has no per-phone camera controls.
+- **Relay admin panel** at `http://localhost:3000`: OBS connection/scene status, device cards with tally/latency/battery, and a director push-to-talk button. It has no per-phone camera controls; copy authenticated stream URLs from each phone's Connection Details drawer.
 - **SSID → relay-host cache**: remembers a relay host per WiFi network
 - **UDP broadcast discovery** on port 9999. Real mDNS/DNS-SD is not implemented; manual relay IP entry is the fallback.
 
@@ -68,7 +68,7 @@ For the director microphone over a LAN IP, use `https://<laptop-ip>:3443` and ac
 
 ### OBS
 1. Enable **obs-websocket v5** (Tools → WebSocket Server Settings, port 4455)
-2. Add a **Browser Source** → URL: `http://<phone-ip>:8787/stream.mjpg` (direct to the phone, no relay proxy). Use `https://<phone-ip>:8788/stream.mjpg` only when TLS is available on the phone.
+2. Add a **Browser Source** → use the authenticated OBS Stream URL shown in the phone app's **Connection Details** drawer. Keep its `token` query parameter; the stream connects directly to the phone, without a relay proxy.
 3. For tally: in the phone dashboard's **Relay** section, enter `http://<relay-ip>:3000` and save. The phone registers automatically and keeps a relay WebSocket open for tally; `/api/register` and `/api/ping` remain available for manual use.
 4. Source names match automatically: the relay reads each OBS Browser Source URL hostname and maps it to the phone whose callback URL has the same hostname. A manual **Source Name** in the phone dashboard is the fallback. The admin panel shows an `AUTO` badge for matched phones, or an amber "set source name in phone dashboard" hint when no source matched.
 
@@ -105,18 +105,18 @@ android-webcam-bridge/              # Android app (Kotlin/Compose)
 ## API endpoints (phone)
 
 Plain HTTP on port 8787. When TLS is available, the same endpoints are also served on HTTPS port 8788.
-There is no authentication on these endpoints.
+Phone server endpoints require the per-install access token. Copy the full authenticated URL from the phone app's **Connection Details** drawer; do not share it beyond trusted OBS clients.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/state` | GET | Full bridge state + settings JSON |
-| `/api/settings?iso=800` | GET | Update any setting field |
-| `/api/tally?state=PROGRAM` | GET | Tally update (the relay normally pushes tally over WebSocket) |
-| `/stream.mjpg` | GET | MJPEG video stream |
-| `/dashboard` | GET | Web dashboard |
-| `/obs-bridge` | GET | OBS overlay page with tally indicator |
-| `/api/audio/in?d=<base64>` | GET | Browser/dashboard mic audio into the phone speaker |
-| `/api/audio/out` | GET | SSE audio from the phone mic to browser clients |
+| `/api/state?token=<token>` | GET | Full bridge state + settings JSON |
+| `/api/settings?token=<token>&iso=800` | GET | Update any setting field |
+| `/api/tally?token=<token>&tallyState=PROGRAM` | GET | Tally update (the relay normally pushes tally over WebSocket) |
+| `/stream.mjpg?token=<token>` | GET | MJPEG video stream |
+| `/dashboard?token=<token>` | GET | Web dashboard |
+| `/obs-bridge?token=<token>` | GET | OBS overlay page with tally indicator |
+| `/api/audio/in?token=<token>&d=<base64>` | GET | Browser/dashboard mic audio into the phone speaker |
+| `/api/audio/out?token=<token>` | GET | SSE audio from the phone mic to browser clients |
 
 ## Relay environment variables
 

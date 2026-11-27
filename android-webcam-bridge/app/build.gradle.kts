@@ -5,22 +5,35 @@ plugins {
     id("org.jlleitschuh.gradle.ktlint")
 }
 
+val releaseSigningNames =
+    listOf("RELEASE_STORE_FILE", "RELEASE_STORE_PASSWORD", "RELEASE_KEY_ALIAS", "RELEASE_KEY_PASSWORD")
+val releaseSigningValues =
+    releaseSigningNames.associateWith { name ->
+        providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orNull
+    }
+val missingReleaseSigningValues = releaseSigningNames.filter { releaseSigningValues[it].isNullOrBlank() }
+
 android {
     namespace = "com.raphael.androidwebcambridge"
     compileSdk = 35
 
-    signingConfigs {
-        create("release") {
-            storeFile = file("src/main/res/raw/keystore.p12")
-            storePassword = "changeit"
-            keyAlias = "streamcam_server_v3"
-            keyPassword = "changeit"
+    if (missingReleaseSigningValues.isEmpty()) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseSigningValues.getValue("RELEASE_STORE_FILE")!!)
+                storePassword = releaseSigningValues.getValue("RELEASE_STORE_PASSWORD")
+                keyAlias = releaseSigningValues.getValue("RELEASE_KEY_ALIAS")
+                keyPassword = releaseSigningValues.getValue("RELEASE_KEY_PASSWORD")
+            }
         }
     }
+
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            if (missingReleaseSigningValues.isEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -28,8 +41,8 @@ android {
         applicationId = "com.raphael.androidwebcambridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -49,6 +62,15 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+}
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name.contains("release", ignoreCase = true) }) {
+        check(missingReleaseSigningValues.isEmpty()) {
+            "Release signing credentials are missing. Configure these Gradle properties or environment variables: " +
+                missingReleaseSigningValues.joinToString(", ")
+        }
     }
 }
 
