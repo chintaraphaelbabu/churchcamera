@@ -55,7 +55,7 @@ function render(data){
   obsLabel.textContent=ok?'OBS Connected · '+(data.programScene||'?')+(data.previewScene?' / Preview: '+data.previewScene:''):'OBS Disconnected';
   const list=data.devices||[];
   countLabel.textContent=list.length+' camera'+(list.length!==1?'s':'');
-  relayLabel.textContent=data.relayAddress?'Relay: '+data.relayAddress+':3000':'';
+  relayLabel.textContent=data.relayAddress?'Relay: '+data.relayAddress+':'+location.port:'';
   if(!list.length){grid.innerHTML='<div class="empty"><h2>No cameras registered</h2><p>Phones will appear here once they register with the relay.</p></div>';return}
   grid.innerHTML=list.map(d=>{
     const state=d.state||'IDLE';

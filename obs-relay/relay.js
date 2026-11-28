@@ -658,16 +658,31 @@ function startAdmin(){
     });
   };
 
-  const server = http.createServer(app);
-  attachWebSocket(server);
-
-  server.listen(ADMIN_PORT, () => console.log('Admin UI + WebSocket on http://localhost:'+ADMIN_PORT));
   if (fs.existsSync(TLS_PFX)) {
+    // HTTP server redirects non-localhost requests to HTTPS so browsers get a
+    // secure context (required for microphone / getUserMedia).
+    const redirectApp = (req, res) => {
+      const host = (req.headers.host || '').replace(/:\d+$/, '');
+      // localhost is already a secure context — no redirect needed
+      if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') {
+        return app(req, res);
+      }
+      const target = `https://${host}:${HTTPS_PORT}${req.url}`;
+      res.writeHead(302, { Location: target });
+      res.end();
+    };
+    const server = http.createServer(redirectApp);
+    attachWebSocket(server);
+    server.listen(ADMIN_PORT, () => console.log('Admin UI (HTTP, redirects non-localhost to HTTPS) on http://localhost:'+ADMIN_PORT));
+
     const secureServer = https.createServer({ pfx: fs.readFileSync(TLS_PFX), passphrase: TLS_PASSWORD }, app);
     attachWebSocket(secureServer);
     secureServer.listen(HTTPS_PORT, () => console.log('Secure admin UI + WebSocket on https://localhost:'+HTTPS_PORT));
   } else {
     console.warn('HTTPS disabled; TLS certificate not found at', TLS_PFX);
+    const server = http.createServer(app);
+    attachWebSocket(server);
+    server.listen(ADMIN_PORT, () => console.log('Admin UI + WebSocket on http://localhost:'+ADMIN_PORT));
   }
   void publishAdminState('startup');
 }
@@ -710,7 +725,9 @@ function getLanIp() {
   return '127.0.0.1';
 }
 const lanIp = getLanIp();
-const discoveryPayload = JSON.stringify({ url: `http://${lanIp}:${ADMIN_PORT}` });
+const discoveryPayload = JSON.stringify({
+  url: fs.existsSync(TLS_PFX) ? `https://${lanIp}:${HTTPS_PORT}` : `http://${lanIp}:${ADMIN_PORT}`,
+});
 udpSocket.on('error', (e) => console.warn('UDP socket error', e.message));
 udpSocket.bind(() => udpSocket.setBroadcast(true));
 setInterval(() => {
